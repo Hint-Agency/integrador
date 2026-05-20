@@ -89,7 +89,7 @@ class AspelServiceTest extends TestCase
         ], $body);
     }
 
-    public function test_it_executes_upsert_contact_against_explicit_upsert_endpoint(): void
+    public function test_it_executes_create_contact_against_contacts_endpoint(): void
     {
         $platform = Platform::query()->create([
             'name' => 'ASPEL Fertifarma',
@@ -106,9 +106,9 @@ class AspelServiceTest extends TestCase
 
         $event = Event::query()->create([
             'platform_id' => $platform->id,
-            'name' => 'Upsert Contact ASPEL',
+            'name' => 'Create Contact ASPEL',
             'event_type_id' => 'generic.external.call',
-            'method_name' => 'upsertContact',
+            'method_name' => 'createContact',
             'type' => 'webhook',
             'active' => true,
         ]);
@@ -138,7 +138,7 @@ class AspelServiceTest extends TestCase
             array $body
         ): bool {
             return $platformKey === 'aspel'
-                && $endpoint === 'https://api.example.com/contacts/upsert'
+                && $endpoint === 'https://api.example.com/contacts'
                 && $method === 'POST'
                 && ($body['nombre'] ?? null) === 'Demo Integrador'
                 && ! array_key_exists('sync_to_aspel', $body);
@@ -150,7 +150,7 @@ class AspelServiceTest extends TestCase
             'external_id' => '50900',
             'latency_ms' => 10,
             'attempt' => 1,
-            'endpoint' => 'https://api.example.com/contacts/upsert',
+            'endpoint' => 'https://api.example.com/contacts',
             'method' => 'POST',
             'data' => ['clave' => '50900'],
             'error' => [
@@ -220,7 +220,7 @@ class AspelServiceTest extends TestCase
             return $platformKey === 'aspel'
                 && $endpoint === 'https://api.example.com/contacts/50902'
                 && $method === 'PUT'
-                && ($body['clave'] ?? null) === '50902'
+                && ! array_key_exists('clave', $body)
                 && ($body['telefono'] ?? null) === '5550001111';
         })->andReturn([
             'success' => true,
@@ -253,6 +253,482 @@ class AspelServiceTest extends TestCase
 
         $this->assertTrue($response['success']);
         $this->assertSame('PUT', $response['method']);
+    }
+
+    public function test_it_replaces_custom_update_placeholder_and_excludes_clave_from_update_body(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => [
+                'api_key' => 'token_123',
+            ],
+            'settings' => [
+                'service_driver' => 'aspel',
+            ],
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Update Contact ASPEL Placeholder',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'updateContact',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'PUT',
+            'base_url' => 'https://api.example.com',
+            'path' => '/contacts/{itemId}',
+            'active' => true,
+        ]);
+
+        $service = new AspelService(
+            $platform,
+            app(AuthStrategyResolver::class),
+            $event,
+            null,
+        );
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/contacts/50902'
+                && $method === 'PUT'
+                && ! array_key_exists('clave', $body)
+                && ($body['telefono'] ?? null) === '5550001111';
+        })->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_aspel_3',
+            'external_id' => '50902',
+            'latency_ms' => 8,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/50902',
+            'method' => 'PUT',
+            'data' => ['success' => true, 'operation' => 'updated', 'clave' => '50902'],
+            'error' => [
+                'code' => null,
+                'message' => null,
+                'details' => null,
+            ],
+        ]);
+
+        $response = $service->executeEndpointCall([
+            'clave' => '50902',
+            'telefono' => '5550001111',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('PUT', $response['method']);
+    }
+
+    public function test_it_uses_contacts_search_endpoint_even_when_update_path_has_placeholder(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Update Contact ASPEL Placeholder Search',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'updateContactWithLookup',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'PUT',
+            'base_url' => 'https://api.example.com',
+            'path' => '/contacts/{clave}',
+            'active' => true,
+        ]);
+
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event, null);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/contacts/search'
+                && $method === 'GET'
+                && $query === ['rfc' => 'RFC123'];
+        })->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_lookup_placeholder',
+            'external_id' => null,
+            'latency_ms' => 7,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/search',
+            'method' => 'GET',
+            'data' => [
+                'found' => false,
+                'count' => 0,
+                'criteriaUsed' => 'rfc',
+                'item' => null,
+                'items' => null,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ]);
+
+        $response = $service->updateContactWithLookup([
+            'rfc' => 'RFC123',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame(1, data_get($response, 'data.not_found_count'));
+    }
+
+    public function test_it_looks_up_contact_before_updating_in_aspel(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+
+        $createEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Create Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'createContact',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'to_event_id' => $createEvent->id,
+            'name' => 'Update Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'updateContactWithLookup',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'POST',
+            'base_url' => 'https://api.example.com',
+            'path' => '/contacts',
+            'active' => true,
+        ]);
+
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event, null);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/contacts/search'
+                && $method === 'GET'
+                && $query === ['rfc' => 'RFC123', 'phone' => '5550001111', 'email' => 'demo@example.com'];
+        })->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_lookup_1',
+            'external_id' => '50902',
+            'latency_ms' => 10,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/search',
+            'method' => 'GET',
+            'data' => [
+                'found' => true,
+                'count' => 1,
+                'criteriaUsed' => 'rfc',
+                'item' => [
+                    'clave' => '50902',
+                    'rfc' => 'RFC123',
+                ],
+                'items' => null,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/contacts/50902'
+                && $method === 'PUT'
+                && ! array_key_exists('clave', $body)
+                && ($body['aspel_lookup']['criteriaUsed'] ?? null) === 'rfc';
+        })->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_update_1',
+            'external_id' => '50902',
+            'latency_ms' => 12,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/50902',
+            'method' => 'PUT',
+            'data' => ['success' => true, 'operation' => 'updated', 'clave' => '50902'],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+
+        $response = $service->updateContactWithLookup([
+            'rfc' => 'RFC123',
+            'phone' => '5550001111',
+            'email' => 'demo@example.com',
+            'nombre' => 'Demo Integrador',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame(1, data_get($response, 'data.updated_count'));
+        $this->assertSame('rfc', data_get($response, 'data.matched_by'));
+    }
+
+    public function test_it_prepares_create_fallback_when_aspel_lookup_does_not_find_contact(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+
+        $createEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Create Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'createContact',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'to_event_id' => $createEvent->id,
+            'name' => 'Update Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'updateContactWithLookup',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'POST',
+            'base_url' => 'https://api.example.com',
+            'path' => '/contacts',
+            'active' => true,
+        ]);
+
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event, null);
+
+        $payload = [
+            'rfc' => 'RFC123',
+            'email' => 'demo@example.com',
+            'nombre' => 'Demo Integrador',
+        ];
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_lookup_2',
+            'external_id' => null,
+            'latency_ms' => 9,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/search',
+            'method' => 'GET',
+            'data' => [
+                'found' => false,
+                'count' => 0,
+                'criteriaUsed' => 'email',
+                'item' => null,
+                'items' => null,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+
+        $response = $service->updateContactWithLookup($payload, $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertNull($response['status'] ?? null);
+        $this->assertSame(1, data_get($response, 'data.not_found_count'));
+        $this->assertSame($payload, data_get($response, 'data.output_payload'));
+    }
+
+    public function test_it_prepares_create_fallback_when_aspel_lookup_returns_contact_not_found_404(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+
+        $createEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Create Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'createContact',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'to_event_id' => $createEvent->id,
+            'name' => 'Update Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'updateContactWithLookup',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'POST',
+            'base_url' => 'https://api.example.com',
+            'path' => '/contacts',
+            'active' => true,
+        ]);
+
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event, null);
+
+        $payload = [
+            'rfc' => 'RFC123',
+            'phone' => '5550001111',
+            'email' => 'demo@example.com',
+            'nombre' => 'Demo Integrador',
+        ];
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => false,
+            'status_code' => 404,
+            'retryable' => false,
+            'request_id' => 'req_lookup_404',
+            'external_id' => null,
+            'latency_ms' => 12,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/search',
+            'method' => 'GET',
+            'data' => [
+                'clave' => 'search',
+                'error' => 'Contact not found',
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+
+        $response = $service->updateContactWithLookup($payload, $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertNull($response['status'] ?? null);
+        $this->assertSame(1, data_get($response, 'data.not_found_count'));
+        $this->assertSame($payload, data_get($response, 'data.output_payload'));
+    }
+
+    public function test_it_returns_warning_when_aspel_lookup_finds_multiple_contacts(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Update Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'updateContactWithLookup',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'POST',
+            'base_url' => 'https://api.example.com',
+            'path' => '/contacts',
+            'active' => true,
+        ]);
+
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event, null);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_lookup_3',
+            'external_id' => null,
+            'latency_ms' => 9,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/contacts/search',
+            'method' => 'GET',
+            'data' => [
+                'found' => true,
+                'count' => 2,
+                'criteriaUsed' => 'phone',
+                'item' => null,
+                'items' => [
+                    ['clave' => '50902'],
+                    ['clave' => '50944'],
+                ],
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ]);
+
+        $response = $service->updateContactWithLookup([
+            'phone' => '5550001111',
+            'nombre' => 'Demo Integrador',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('warning', $response['status']);
+        $this->assertSame('multiple_matches', data_get($response, 'data.warning_reason'));
+        $this->assertSame([], data_get($response, 'data.output_payload'));
     }
 
     public function test_it_supports_polling_updated_contacts_with_explicit_get_operation(): void

@@ -10,6 +10,7 @@ const props = defineProps({
     platforms: { type: Array, default: () => [] },
     event_options: { type: Array, default: () => [] },
     event_type_groups: { type: Array, default: () => [] },
+    platform_method_options: { type: Object, default: () => ({}) },
 });
 
 const isEdit = computed(() => props.mode === 'edit');
@@ -96,6 +97,19 @@ if (hasInitialHttpConfig) {
 const selectedPlatform = computed(() => props.platforms.find((platform) => Number(platform.id) === Number(form.platform_id)) ?? null);
 const selectedPlatformType = computed(() => selectedPlatform.value?.type ?? null);
 const isGenericPlatform = computed(() => selectedPlatformType.value === 'generic');
+const selectedPlatformMethodOptions = computed(() => props.platform_method_options?.[String(form.platform_id)] ?? []);
+const methodNameExistsInOptions = computed(() => selectedPlatformMethodOptions.value.some((option) => option.value === form.method_name));
+const shouldUseMethodSelect = computed(() => selectedPlatformMethodOptions.value.length > 0 || !!form.method_name);
+const methodOptionsForSelect = computed(() => {
+    if (!form.method_name || methodNameExistsInOptions.value) {
+        return selectedPlatformMethodOptions.value;
+    }
+
+    return [
+        { value: form.method_name, label: `${form.method_name} (legacy/manual)` },
+        ...selectedPlatformMethodOptions.value,
+    ];
+});
 
 const filteredEventTypeGroups = computed(() => {
     const platformType = selectedPlatformType.value;
@@ -322,8 +336,23 @@ watch(isGenericPlatform, (value) => {
 
                     <label class="lightbox-field">
                         <span class="lightbox-label">Method Name</span>
-                        <input v-model="form.method_name" class="lightbox-input" type="text" placeholder="objectPropertyChange">
-                        <span class="lightbox-help">Método del servicio que ejecutará la lógica principal del evento.</span>
+                        <select v-if="shouldUseMethodSelect" v-model="form.method_name" class="lightbox-select">
+                            <option value="">No method</option>
+                            <option
+                                v-for="option in methodOptionsForSelect"
+                                :key="option.value"
+                                :value="option.value"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                        <input v-else v-model="form.method_name" class="lightbox-input" type="text" placeholder="objectPropertyChange">
+                        <span class="lightbox-help">
+                            Método del servicio que ejecutará la lógica principal del evento.
+                            <template v-if="!selectedPlatformMethodOptions.length">
+                                No hay métodos sugeridos para esta plataforma; se habilita captura manual como fallback.
+                            </template>
+                        </span>
                     </label>
 
                     <label class="lightbox-field">

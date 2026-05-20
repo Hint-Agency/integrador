@@ -2,7 +2,6 @@
 
 namespace App\Services\Aspel;
 
-use App\Jobs\ProcessObjectUpdateJob;
 use App\Models\Config;
 use App\Models\Event;
 use App\Models\EventIdempotencyKey;
@@ -15,6 +14,7 @@ use App\Services\Generic\AuthStrategyResolver;
 use App\Services\Generic\GenericPlatformService;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class AspelService extends GenericPlatformService
@@ -23,6 +23,7 @@ class AspelService extends GenericPlatformService
     private const DEFAULT_INITIAL_LOOKBACK_HOURS = 24;
     private const CHANGE_IDEMPOTENCY_TTL_HOURS = 24 * 30;
     private const CHANGE_IDEMPOTENCY_STALE_MINUTES = 15;
+    private const DETAIL_NOT_FOUND_RETRY_BACKOFF_SECONDS = [1, 3];
 
     /**
      * @var list<string>
@@ -48,6 +49,10 @@ class AspelService extends GenericPlatformService
         'subscriptionType',
         'sync_status_aspel',
         'sync_to_aspel',
+        'versionSinc',
+        'version_sinc',
+        'VERSION_SINC',
+        'cursor_context',
     ];
 
     public function __construct(
@@ -76,16 +81,6 @@ class AspelService extends GenericPlatformService
         );
     }
 
-    public function syncContact(array $payload): array
-    {
-        return $this->upsertContact($payload);
-    }
-
-    public function upsertContact(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
-    {
-        return $this->sendContactRequest('upsert', $payload, $httpAdapter);
-    }
-
     public function createContact(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
     {
         return $this->sendContactRequest('create', $payload, $httpAdapter);
@@ -106,6 +101,168 @@ class AspelService extends GenericPlatformService
         }
 
         return $this->sendContactRequest('update', $payload, $httpAdapter, $clave);
+    }
+
+    public function findContact(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $query = $this->buildSearchQuery($payload);
+        if ($query === []) {
+            return [
+                'success' => false,
+                'message' => 'ASPEL contact search requires at least one lookup field.',
+                'data' => [
+                    'required_context' => ['clave', 'rfc', 'phone', 'email'],
+                    'received_keys' => array_keys($payload),
+                ],
+            ];
+        }
+
+        return $this->sendRequest(
+            $this->resolveOperationEndpoint('search', $payload),
+            $this->resolveOperationHttpMethod('search'),
+            ['query' => $query],
+            $httpAdapter
+        );
+    }
+
+    public function updateContactWithLookup(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $lookupCriteria = $this->buildSearchQuery($payload);
+        $lookupResponse = $this->findContact($payload, $httpAdapter);
+        $this->logAspelLookupResult($lookupCriteria, $lookupResponse, $payload);
+
+        if (! ($lookupResponse['success'] ?? false) && ! $this->isLookupNotFoundResponse($lookupResponse)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to lookup ASPEL contact before update.',
+                'data' => [
+                    'lookup_response' => $lookupResponse,
+                    'lookup_criteria' => $lookupCriteria,
+                ],
+            ];
+        }
+
+        $lookupData = $this->isLookupNotFoundResponse($lookupResponse)
+            ? [
+                'found' => false,
+                'count' => 0,
+                'criteriaUsed' => Arr::get($lookupResponse, 'data.criteriaUsed'),
+                'item' => null,
+                'items' => null,
+            ]
+            : Arr::get($lookupResponse, 'data', []);
+        $count = (int) Arr::get($lookupData, 'count', 0);
+        $found = (bool) Arr::get($lookupData, 'found', false);
+        $criteriaUsed = Arr::get($lookupData, 'criteriaUsed');
+
+        if ($found && $count === 1) {
+            $matchItem = Arr::get($lookupData, 'item', []);
+            $clave = $this->resolveAspelClave(is_array($matchItem) ? $matchItem : []);
+
+            if ($clave === null) {
+                return [
+                    'success' => false,
+                    'message' => 'ASPEL contact lookup matched a record without clave.',
+                    'data' => [
+                        'lookup_response' => $lookupResponse,
+                        'lookup_criteria' => $lookupCriteria,
+                    ],
+                ];
+            }
+
+            $updatePayload = array_merge($payload, [
+                'clave' => $clave,
+                'aspel_lookup' => [
+                    'found' => true,
+                    'count' => $count,
+                    'criteriaUsed' => $criteriaUsed,
+                    'item' => $matchItem,
+                ],
+            ]);
+
+            $updateResponse = $this->updateContact($updatePayload, $httpAdapter);
+
+            if (! ($updateResponse['success'] ?? false)) {
+                return [
+                        'success' => false,
+                        'message' => 'ASPEL contact update failed after successful lookup.',
+                        'data' => [
+                            'lookup_response' => $lookupResponse,
+                            'update_response' => $updateResponse,
+                            'lookup_criteria' => $lookupCriteria,
+                        ],
+                    ];
+            }
+
+            $updateResponse['data'] = array_merge(
+                is_array($updateResponse['data'] ?? null) ? $updateResponse['data'] : [],
+                [
+                    'updated_count' => 1,
+                    'not_found_count' => 0,
+                    'matched_by' => $criteriaUsed,
+                    'lookup_response' => $lookupData,
+                    'output_payload' => [],
+                ]
+            );
+
+            return $updateResponse;
+        }
+
+        if ($count > 1) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'Multiple ASPEL contacts matched the provided lookup criteria.',
+                'data' => [
+                    'updated_count' => 0,
+                    'not_found_count' => 0,
+                    'warning_reason' => 'multiple_matches',
+                    'lookup_criteria' => $lookupCriteria,
+                    'lookup_response' => $lookupData,
+                    'output_payload' => [],
+                ],
+            ];
+        }
+
+        $hasFallbackEvent = (bool) ($this->event?->to_event_id);
+        $status = $hasFallbackEvent ? null : 'warning';
+        $message = $hasFallbackEvent
+            ? 'ASPEL contact was not found for update; create fallback payload prepared.'
+            : 'ASPEL contact was not found for update and no create fallback event is configured.';
+
+        return [
+            'success' => true,
+            'status' => $status,
+            'message' => $message,
+            'data' => [
+                'updated_count' => 0,
+                'not_found_count' => 1,
+                'warning_reason' => $hasFallbackEvent ? null : 'missing_create_fallback_event',
+                'matched_by' => null,
+                'lookup_criteria' => $lookupCriteria,
+                'lookup_response' => $lookupData,
+                'output_payload' => $payload,
+            ],
+        ];
+    }
+
+    private function isLookupNotFoundResponse(array $lookupResponse): bool
+    {
+        if ((int) Arr::get($lookupResponse, 'status_code', 0) !== 404) {
+            return false;
+        }
+
+        $message = $this->resolveScalarValue([
+            Arr::get($lookupResponse, 'error.message'),
+            Arr::get($lookupResponse, 'data.error'),
+            Arr::get($lookupResponse, 'message'),
+        ]);
+
+        if ($message === null) {
+            return false;
+        }
+
+        return str_contains(Str::lower($message), 'contact not found');
     }
 
     public function getUpdatedContacts(array $payload = [], ?GenericHttpAdapter $httpAdapter = null): array
@@ -130,7 +287,7 @@ class AspelService extends GenericPlatformService
         $take = max(1, (int) ($this->event->meta['take'] ?? Arr::get($payload, 'take', self::DEFAULT_CHANGES_TAKE)));
         $cursor = $this->loadCursorState();
         $runStartedAt = now()->toISOString();
-
+\Log::info('Starting ASPEL contact change polling run', ['take' => $take, 'initial_cursor' => $cursor, 'payload' => $payload, 'run_started_at' => $runStartedAt]);
         $metrics = [
             'take' => $take,
             'pages_processed' => 0,
@@ -196,7 +353,7 @@ class AspelService extends GenericPlatformService
                     }
 
                     $clave = $this->resolveAspelClave($item);
-                    $detailResponse = $this->getContactDetailByClave((string) $clave, $httpAdapter);
+                    $detailResponse = $this->getContactDetailByClaveWithRetry((string) $clave, $httpAdapter);
 
                     if (! ($detailResponse['success'] ?? false)) {
                         $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
@@ -210,12 +367,13 @@ class AspelService extends GenericPlatformService
                         return $this->failPollingRun(
                             'Failed to fetch ASPEL contact detail.',
                             [
-                                'changes_response' => $pageResponse,
-                                'detail_response' => $detailResponse,
-                                'failed_item' => $item,
-                            ],
-                            $currentCursor,
-                            $metrics
+                            'changes_response' => $pageResponse,
+                            'detail_response' => $detailResponse,
+                            'failed_item' => $item,
+                            'detail_retry_attempts' => $detailResponse['retry_attempts'] ?? 0,
+                        ],
+                        $currentCursor,
+                        $metrics
                         );
                     }
 
@@ -298,6 +456,7 @@ class AspelService extends GenericPlatformService
             'metrics' => $metrics,
             'last_run_started_at' => $runStartedAt,
             'last_run_finished_at' => $runFinishedAt,
+            'output_payload' => [],
         ];
 
         $this->mergeRecordDetails([
@@ -336,6 +495,44 @@ class AspelService extends GenericPlatformService
             [],
             $httpAdapter
         );
+    }
+
+    private function getContactDetailByClaveWithRetry(string $clave, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $attempt = 0;
+        $lastResponse = [];
+
+        do {
+            $attempt++;
+            $response = $this->getContactDetailByClave($clave, $httpAdapter);
+            $lastResponse = $response;
+
+            if (($response['success'] ?? false) === true) {
+                $response['retry_attempts'] = $attempt;
+
+                return $response;
+            }
+
+            if (($response['status_code'] ?? null) !== 404) {
+                $response['retry_attempts'] = $attempt;
+
+                return $response;
+            }
+
+            $backoffSeconds = self::DETAIL_NOT_FOUND_RETRY_BACKOFF_SECONDS[$attempt - 1] ?? null;
+            if ($backoffSeconds === null) {
+                break;
+            }
+
+            if (! app()->environment('testing')) {
+                sleep($backoffSeconds);
+            }
+        } while (true);
+
+        $lastResponse['retry_attempts'] = $attempt;
+        $lastResponse['retry_exhausted'] = true;
+
+        return $lastResponse;
     }
 
     public function executeEndpointCall(array $payload, GenericHttpAdapter $httpAdapter): array
@@ -384,7 +581,7 @@ class AspelService extends GenericPlatformService
         return $this->sendRequest(
             $this->resolveOperationEndpoint($operation, $payload, $clave),
             $this->resolveOperationHttpMethod($operation),
-            $payload,
+            $this->preparePayloadForOperation($operation, $payload),
             $httpAdapter
         );
     }
@@ -434,7 +631,7 @@ class AspelService extends GenericPlatformService
         $endpoint = $this->resolveEndpoint($this->event);
 
         return match ($operation) {
-            'upsert' => $this->normalizeUpsertEndpoint($endpoint),
+            'search' => $this->resolveSearchEndpoint($endpoint),
             'update' => $this->normalizeUpdateEndpoint($endpoint, $clave ?? $this->resolveAspelClave($payload)),
             default => $endpoint,
         };
@@ -443,24 +640,12 @@ class AspelService extends GenericPlatformService
     private function resolveOperationHttpMethod(string $operation): string
     {
         return match ($operation) {
-            'create', 'upsert' => 'POST',
+            'create' => 'POST',
+            'search' => 'GET',
             'update' => 'PUT',
             'poll' => 'GET',
             default => $this->resolveMethod($this->event),
         };
-    }
-
-    private function normalizeUpsertEndpoint(string $endpoint): string
-    {
-        if (preg_match('~/contacts/upsert/?$~i', $endpoint) === 1) {
-            return $endpoint;
-        }
-
-        if (preg_match('~/contacts/?$~i', $endpoint) === 1) {
-            return rtrim($endpoint, '/') . '/upsert';
-        }
-
-        return $endpoint;
     }
 
     private function normalizeUpdateEndpoint(string $endpoint, ?string $clave): string
@@ -471,8 +656,8 @@ class AspelService extends GenericPlatformService
 
         $normalizedClave = trim($clave);
 
-        if (str_contains($endpoint, '{clave}')) {
-            return str_replace('{clave}', rawurlencode($normalizedClave), $endpoint);
+        if (preg_match('/\{[^}]+\}/', $endpoint) === 1) {
+            return preg_replace('/\{[^}]+\}/', rawurlencode($normalizedClave), $endpoint, 1) ?: $endpoint;
         }
 
         if (preg_match('~/contacts/?$~i', $endpoint) === 1) {
@@ -499,6 +684,32 @@ class AspelService extends GenericPlatformService
         return rtrim($endpoint, '/') . '/' . rawurlencode($clave);
     }
 
+    private function resolveSearchEndpoint(string $endpoint): string
+    {
+        $configured = $this->event?->meta['search_endpoint'] ?? null;
+        if (is_string($configured) && trim($configured) !== '') {
+            return trim($configured);
+        }
+
+        $endpoint = preg_replace('/\{[^}]+\}/', '', $endpoint) ?: $endpoint;
+
+        if (preg_match('~/contacts/search/?$~i', $endpoint) === 1) {
+            return $endpoint;
+        }
+
+        if (preg_match('~/contacts/upsert/?$~i', $endpoint) === 1) {
+            $endpoint = preg_replace('~/upsert/?$~i', '', $endpoint) ?: $endpoint;
+        }
+
+        $endpoint = preg_replace('~/contacts/[^/]+/?$~i', '/contacts', $endpoint) ?: $endpoint;
+
+        if (preg_match('~/contacts/?$~i', $endpoint) === 1) {
+            return rtrim($endpoint, '/') . '/search';
+        }
+
+        return rtrim($endpoint, '/') . '/search';
+    }
+
     private function resolveAspelClave(array $payload): ?string
     {
         $candidates = [
@@ -519,6 +730,41 @@ class AspelService extends GenericPlatformService
         }
 
         return null;
+    }
+
+    private function preparePayloadForOperation(string $operation, array $payload): array
+    {
+        if ($operation !== 'update') {
+            return $payload;
+        }
+
+        unset($payload['clave'], $payload['CLAVE']);
+
+        return $payload;
+    }
+
+    private function logAspelLookupResult(array $lookupCriteria, array $lookupResponse, array $payload): void
+    {
+        $summary = [
+            'event_id' => $this->event?->id,
+            'record_id' => $this->record?->id,
+            'lookup_criteria' => $lookupCriteria,
+            'resolved_clave' => $this->resolveAspelClave($payload),
+            'response_success' => $lookupResponse['success'] ?? null,
+            'response_status_code' => $lookupResponse['status_code'] ?? null,
+            'response_found' => Arr::get($lookupResponse, 'data.found'),
+            'response_count' => Arr::get($lookupResponse, 'data.count'),
+            'response_criteria_used' => Arr::get($lookupResponse, 'data.criteriaUsed'),
+            'response_item' => Arr::get($lookupResponse, 'data.item'),
+            'response_items' => Arr::get($lookupResponse, 'data.items'),
+            'response_error' => $lookupResponse['error'] ?? null,
+        ];
+
+        Log::info('ASPEL contact lookup executed.', $summary);
+
+        $this->mergeRecordDetails([
+            'aspel_lookup' => $summary,
+        ]);
     }
 
     private function resolveAspelVersionSinc(array $payload): ?string
@@ -543,8 +789,59 @@ class AspelService extends GenericPlatformService
         return null;
     }
 
+    /**
+     * @return array<string, string>
+     */
+    private function buildSearchQuery(array $payload): array
+    {
+        $query = [];
+
+        foreach ([
+            'clave' => $this->resolveAspelClave($payload),
+            'rfc' => $this->resolveScalarValue([
+                Arr::get($payload, 'rfc'),
+                Arr::get($payload, 'Rfc'),
+                Arr::get($payload, 'RFC'),
+            ]),
+            'phone' => $this->resolveScalarValue([
+                Arr::get($payload, 'phone'),
+                Arr::get($payload, 'telefono'),
+                Arr::get($payload, 'Telefono'),
+            ]),
+            'email' => $this->resolveScalarValue([
+                Arr::get($payload, 'email'),
+                Arr::get($payload, 'emailEnvio'),
+                Arr::get($payload, 'Email'),
+            ]),
+        ] as $key => $value) {
+            if ($value !== null) {
+                $query[$key] = $value;
+            }
+        }
+
+        return $query;
+    }
+
+    private function resolveScalarValue(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            if (! is_scalar($candidate)) {
+                continue;
+            }
+
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
     private function loadCursorState(): array
     {
+        \Log::info('Loading ASPEL contact sync cursor state.', ['sinceTs' => $this->getCursorValue('since_ts'), 'sinceClave' => self::DEFAULT_INITIAL_LOOKBACK_HOURS]);
+        \Log::info('Loading ASPEL contact sync cursor state.', ['sinceTs' => $this->normalizeCursorValue($this->getCursorValue('since_ts')), 'sinceClave' => now()->subHours(self::DEFAULT_INITIAL_LOOKBACK_HOURS)->toISOString()]);
         return [
             'sinceTs' => $this->normalizeCursorValue($this->getCursorValue('since_ts'))
                 ?? now()->subHours(self::DEFAULT_INITIAL_LOOKBACK_HOURS)->toISOString(),
@@ -758,20 +1055,81 @@ class AspelService extends GenericPlatformService
             ];
         }
 
-        $record = app(EventLoggingService::class)->createEventRecord(
-            $nextEvent->event_type_id ?? $nextEvent->name,
+        return $this->processEventSynchronously($nextEvent, $payload, $this->record);
+    }
+
+    private function processEventSynchronously(Event $event, array $payload, Record $parentRecord): array
+    {
+        $eventLoggingService = app(EventLoggingService::class);
+        $eventProcessingService = app(EventProcessingService::class);
+
+        $record = $eventLoggingService->createEventRecord(
+            $event->event_type_id ?? $event->name,
             'init',
             $payload,
-            'ASPEL contact change ready for HubSpot sync.',
-            $this->record->id,
-            $nextEvent->id
+            'ASPEL contact change ready for synchronous event processing.',
+            $parentRecord->id,
+            $event->id
         );
 
+        $record->update([
+            'status' => 'processing',
+            'message' => 'Processing synchronous ASPEL event chain',
+        ]);
+
+        $serviceClass = $eventProcessingService->getServiceClass($event->platform);
+        if (! $serviceClass || ! class_exists($serviceClass)) {
+            $eventLoggingService->logEventWarning($record, 'Service class not found for synchronous event processing.', [
+                'reason' => 'service_class_not_found',
+                'event_id' => $event->id,
+                'event_type_id' => $event->event_type_id,
+                'platform_type' => $event->platform?->type,
+                'service_class' => $serviceClass,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $record->message ?: 'Service class not found for synchronous event processing.',
+                'record_id' => $record->id,
+                'data' => [
+                    'status' => $record->status,
+                    'details' => $record->details,
+                ],
+            ];
+        }
+
+        $service = app()->make($serviceClass, [
+            'platform' => $event->platform,
+            'event' => $event,
+            'record' => $record,
+        ]);
+        $methodName = $event->getMethodName() ?? $event->method_name;
+
+        if (! $methodName || ! method_exists($service, $methodName)) {
+            $eventLoggingService->logEventWarning($record, 'Event method not available for synchronous processing.', [
+                'reason' => 'method_not_available',
+                'event_id' => $event->id,
+                'event_type_id' => $event->event_type_id,
+                'platform_type' => $event->platform?->type,
+                'service_class' => $serviceClass,
+                'method_name' => $methodName,
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $record->message ?: 'Event method not available for synchronous processing.',
+                'record_id' => $record->id,
+                'data' => [
+                    'status' => $record->status,
+                    'details' => $record->details,
+                ],
+            ];
+        }
+
         try {
-            (new ProcessObjectUpdateJob($nextEvent, $record, $payload))
-                ->handle(app(EventProcessingService::class), app(EventLoggingService::class));
+            $result = $this->invokeServiceMethod($service, $methodName, $payload, $event, $record);
         } catch (\Throwable $exception) {
-            $record->refresh();
+            $eventLoggingService->logEventError($record, $exception);
 
             return [
                 'success' => false,
@@ -784,12 +1142,19 @@ class AspelService extends GenericPlatformService
             ];
         }
 
-        $record->refresh();
+        $outputPayload = $this->resolveOutputPayload($result, $payload);
+        $this->mergeRecordDetails([
+            'service_output' => Arr::get($result, 'data', []),
+            'service_message' => Arr::get($result, 'message'),
+            'output_payload' => $outputPayload,
+        ], $record);
 
-        if ($record->status !== 'success') {
+        if (! Arr::get($result, 'success', false)) {
+            $eventLoggingService->logEventError($record, new \RuntimeException(Arr::get($result, 'message', 'Synchronous event processing failed.')));
+
             return [
                 'success' => false,
-                'message' => $record->message ?: 'HubSpot sync did not finish successfully.',
+                'message' => $record->message ?: Arr::get($result, 'message', 'Synchronous event processing failed.'),
                 'record_id' => $record->id,
                 'data' => [
                     'status' => $record->status,
@@ -798,12 +1163,91 @@ class AspelService extends GenericPlatformService
             ];
         }
 
+        if (Arr::get($result, 'status') === 'warning') {
+            $eventLoggingService->logEventWarning(
+                $record,
+                Arr::get($result, 'message', 'Synchronous event processed with warnings.'),
+                Arr::get($result, 'data', [])
+            );
+
+            return [
+                'success' => false,
+                'message' => $record->message ?: Arr::get($result, 'message', 'Synchronous event processed with warnings.'),
+                'record_id' => $record->id,
+                'data' => [
+                    'status' => $record->status,
+                    'details' => $record->details,
+                ],
+            ];
+        }
+
+        $eventLoggingService->logEventSuccess($record, Arr::get($result, 'message', 'Synchronous event processed.'));
+
+        if ($event->to_event && $this->shouldDispatchNextPayload($outputPayload)) {
+            $preparedPayload = app(\App\Services\EventFlowService::class)->transformPayloadForEvent($event, $outputPayload);
+
+            return $this->processEventSynchronously($event->to_event, $preparedPayload, $record);
+        }
+
         return [
             'success' => true,
             'message' => $record->message,
             'record_id' => $record->id,
             'data' => is_array($record->details) ? ($record->details['service_output'] ?? []) : [],
         ];
+    }
+
+    private function invokeServiceMethod(object $service, string $methodName, array $payload, Event $event, Record $record): array
+    {
+        $reflection = new \ReflectionMethod($service, $methodName);
+        $required = $reflection->getNumberOfRequiredParameters();
+
+        if ($required === 0) {
+            $result = $service->{$methodName}();
+        } elseif ($required === 1) {
+            $result = $service->{$methodName}($payload);
+        } elseif ($required === 2) {
+            $result = $service->{$methodName}($payload, $record);
+        } else {
+            $subscriptionType = $event->getSubscriptionType() ?? $event->name;
+            $result = $service->{$methodName}($subscriptionType, $payload, $record);
+        }
+
+        if (is_array($result)) {
+            return $result;
+        }
+
+        return [
+            'success' => (bool) $result,
+            'message' => $result ? 'Event processed.' : 'Event processing failed.',
+            'data' => [],
+        ];
+    }
+
+    private function resolveOutputPayload(array $result, array $fallback): array
+    {
+        $outputPayload = Arr::get($result, 'data.output_payload');
+
+        if (is_array($outputPayload)) {
+            return $outputPayload;
+        }
+
+        $data = Arr::get($result, 'data', []);
+
+        return is_array($data) ? $data : $fallback;
+    }
+
+    private function shouldDispatchNextPayload(array $payload): bool
+    {
+        if ($payload === []) {
+            return false;
+        }
+
+        if (array_is_list($payload)) {
+            return count($payload) > 0;
+        }
+
+        return true;
     }
 
     private function failPollingRun(string $message, array $context, array $cursor, array $metrics): array
@@ -831,14 +1275,15 @@ class AspelService extends GenericPlatformService
         ];
     }
 
-    private function mergeRecordDetails(array $details): void
+    private function mergeRecordDetails(array $details, ?Record $record = null): void
     {
-        if (! $this->record) {
+        $targetRecord = $record ?? $this->record;
+        if (! $targetRecord) {
             return;
         }
 
-        $existing = is_array($this->record->details) ? $this->record->details : [];
-        $this->record->update([
+        $existing = is_array($targetRecord->details) ? $targetRecord->details : [];
+        $targetRecord->update([
             'details' => array_replace_recursive($existing, $details),
         ]);
     }

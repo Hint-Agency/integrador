@@ -66,7 +66,11 @@ class EndpointExecutionJob implements ShouldQueue
         }
         $idempotencyModel = $idempotency['model'];
 
-        $response = $platformService->executeEndpointCall($this->payload, $httpAdapter);
+        $response = $this->normalizeExecutionResponse(
+            $platformService->executeEndpointCall($this->payload, $httpAdapter),
+            $endpoint,
+            $method
+        );
 
         if ($response['retryable'] && $this->attempts() < $this->tries) {
             $retryAfter = $this->extractRetryAfter($response);
@@ -151,7 +155,12 @@ class EndpointExecutionJob implements ShouldQueue
             $responseData = ['raw' => $responseData];
         }
 
-        return array_replace_recursive($responseData, $this->extractNextEventContext($sourceEventId), [
+        $basePayload = Arr::get($responseData, 'output_payload');
+        if (! is_array($basePayload)) {
+            $basePayload = $responseData;
+        }
+
+        return array_replace_recursive($basePayload, $this->extractNextEventContext($sourceEventId), [
             'source_event_id' => $sourceEventId,
             'destination_response' => $this->sanitizeResponse($response),
             'destination_execution' => [
@@ -210,9 +219,42 @@ class EndpointExecutionJob implements ShouldQueue
 
     private function sanitizeResponse(array $response): array
     {
-        $response['error']['details'] = $this->sanitizeErrorDetails($response['error']['details'] ?? null);
+        Arr::set($response, 'error.details', $this->sanitizeErrorDetails(Arr::get($response, 'error.details')));
 
         return $response;
+    }
+
+    private function normalizeExecutionResponse(array $response, string $endpoint, string $method): array
+    {
+        $normalized = $response;
+
+        $success = (bool) Arr::get($response, 'success', false);
+        $normalized['success'] = $success;
+        $normalized['retryable'] = (bool) Arr::get($response, 'retryable', false);
+        $normalized['status_code'] = Arr::get($response, 'status_code', $success ? 200 : 0);
+        $normalized['request_id'] = Arr::get($response, 'request_id', '');
+        $normalized['external_id'] = Arr::get($response, 'external_id');
+        $normalized['latency_ms'] = Arr::get($response, 'latency_ms');
+        $normalized['attempt'] = (int) Arr::get($response, 'attempt', $this->attempts());
+        $normalized['endpoint'] = Arr::get($response, 'endpoint', $endpoint);
+        $normalized['method'] = Arr::get($response, 'method', strtoupper($method));
+
+        $error = Arr::get($response, 'error');
+        if (! is_array($error)) {
+            $error = [];
+        }
+
+        $normalized['error'] = [
+            'code' => $error['code'] ?? null,
+            'message' => $error['message'] ?? Arr::get($response, 'message'),
+            'details' => $error['details'] ?? null,
+        ];
+
+        if (! array_key_exists('data', $normalized)) {
+            $normalized['data'] = [];
+        }
+
+        return $normalized;
     }
 
     private function sanitizeErrorDetails(?string $details): ?string

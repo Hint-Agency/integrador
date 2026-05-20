@@ -10,6 +10,7 @@ use App\Models\Record;
 use App\Services\Hubspot\HubspotService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -62,7 +63,7 @@ class HubspotAspelContactSyncTest extends TestCase
             'record' => $record,
         ]);
 
-        $result = $service->syncAspelContactToHubspot($this->buildAspelPayload());
+        $result = $service->updateAspelContactInHubspot($this->buildAspelPayload());
 
         $this->assertTrue($result['success']);
         $this->assertSame('updated', $result['data']['operation']);
@@ -81,6 +82,7 @@ class HubspotAspelContactSyncTest extends TestCase
                 && ($properties['phone'] ?? null) === '5551234567'
                 && ($properties['rfc'] ?? null) === 'LOMJ850214H12'
                 && ($properties['clave'] ?? null) === '50902'
+                && ($properties['fecha_alta'] ?? null) === Carbon::parse('2026-09-01T00:00:00')->utc()->getTimestampMs()
                 && ($properties['sync_status_aspel'] ?? null) === 'success'
                 && ($properties['last_error_aspel'] ?? null) === ''
                 && array_key_exists('last_sync_aspel', $properties)
@@ -88,7 +90,7 @@ class HubspotAspelContactSyncTest extends TestCase
         });
     }
 
-    public function test_it_creates_hubspot_contact_when_no_match_is_found(): void
+    public function test_it_prepares_create_fallback_when_no_hubspot_match_is_found(): void
     {
         config()->set('hubspot.access_token', 'token_123');
         config()->set('hubspot.base_url', 'https://api.hubapi.test');
@@ -96,13 +98,6 @@ class HubspotAspelContactSyncTest extends TestCase
         Http::fake(function (Request $request) {
             if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
                 return Http::response(['results' => []], 200);
-            }
-
-            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts') {
-                return Http::response([
-                    'id' => '501',
-                    'properties' => $request->data()['properties'] ?? [],
-                ], 201);
             }
 
             return Http::response(['error' => 'Unexpected request'], 500);
@@ -116,25 +111,12 @@ class HubspotAspelContactSyncTest extends TestCase
             'record' => $record,
         ]);
 
-        $result = $service->syncAspelContactToHubspot($this->buildAspelPayload());
+        $result = $service->updateAspelContactInHubspot($this->buildAspelPayload());
 
         $this->assertTrue($result['success']);
-        $this->assertSame('created', $result['data']['operation']);
-        $this->assertSame('501', $result['data']['contact_id']);
-
-        Http::assertSent(function (Request $request): bool {
-            if ($request->method() !== 'POST' || $request->url() !== 'https://api.hubapi.test/crm/v3/objects/contacts') {
-                return false;
-            }
-
-            $properties = $request->data()['properties'] ?? [];
-
-            return ($properties['firstname'] ?? null) === 'JUAN CARLOS LOPEZ MARTINEZ'
-                && ($properties['email'] ?? null) === 'juan.lopez@example.com'
-                && ($properties['phone'] ?? null) === '5551234567'
-                && ($properties['clave'] ?? null) === '50902'
-                && ($properties['sync_status_aspel'] ?? null) === 'success';
-        });
+        $this->assertSame('not_found', $result['data']['operation']);
+        $this->assertSame(1, $result['data']['not_found_count']);
+        $this->assertSame($this->buildAspelPayload(), $result['data']['output_payload']);
     }
 
     public function test_it_updates_hubspot_contact_matching_by_phone_when_clave_and_rfc_do_not_match(): void
@@ -186,7 +168,7 @@ class HubspotAspelContactSyncTest extends TestCase
             'record' => $record,
         ]);
 
-        $result = $service->syncAspelContactToHubspot($this->buildAspelPayload());
+        $result = $service->updateAspelContactInHubspot($this->buildAspelPayload());
 
         $this->assertTrue($result['success']);
         $this->assertSame('updated', $result['data']['operation']);
@@ -226,12 +208,44 @@ class HubspotAspelContactSyncTest extends TestCase
             'record' => $record,
         ]);
 
-        $result = $service->syncAspelContactToHubspot($this->buildAspelPayload());
+        $result = $service->updateAspelContactInHubspot($this->buildAspelPayload());
 
-        $this->assertFalse($result['success']);
+        $this->assertTrue($result['success']);
+        $this->assertSame('warning', $result['status']);
         $this->assertSame('Multiple HubSpot contacts matched ASPEL change.', $result['message']);
         $this->assertSame('clave', data_get($result, 'data.match_property'));
         $this->assertCount(2, data_get($result, 'data.matches', []));
+    }
+
+    public function test_it_creates_hubspot_contact_from_explicit_create_fallback(): void
+    {
+        config()->set('hubspot.access_token', 'token_123');
+        config()->set('hubspot.base_url', 'https://api.hubapi.test');
+
+        Http::fake(function (Request $request) {
+            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts') {
+                return Http::response([
+                    'id' => '501',
+                    'properties' => $request->data()['properties'] ?? [],
+                ], 201);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        [$hubspotPlatform, $aspelPlatform, $mappingEvent, $syncEvent, $record] = $this->prepareAspelHubspotSyncContext();
+
+        $service = app()->make(HubspotService::class, [
+            'platform' => $hubspotPlatform,
+            'event' => $syncEvent,
+            'record' => $record,
+        ]);
+
+        $result = $service->createAspelContactInHubspot($this->buildAspelPayload());
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('created', $result['data']['operation']);
+        $this->assertSame('501', $result['data']['contact_id']);
     }
 
     private function prepareAspelHubspotSyncContext(): array
@@ -259,11 +273,27 @@ class HubspotAspelContactSyncTest extends TestCase
             'active' => true,
         ]);
 
+        $createEvent = Event::query()->create([
+            'platform_id' => $hubspotPlatform->id,
+            'name' => 'Create ASPEL Contact To HubSpot',
+            'event_type_id' => 'object.created',
+            'method_name' => 'createAspelContactInHubspot',
+            'type' => 'webhook',
+            'meta' => [
+                'object_type' => 'contacts',
+                'target_platform' => 'aspel',
+                'response_mapping_event_id' => $mappingEvent->id,
+                'version_sinc_property' => 'version_sinc_aspel',
+            ],
+            'active' => true,
+        ]);
+
         $syncEvent = Event::query()->create([
             'platform_id' => $hubspotPlatform->id,
             'name' => 'Sync ASPEL Contact To HubSpot',
             'event_type_id' => 'object.updated',
-            'method_name' => 'syncAspelContactToHubspot',
+            'method_name' => 'updateAspelContactInHubspot',
+            'to_event_id' => $createEvent->id,
             'type' => 'webhook',
             'meta' => [
                 'object_type' => 'contacts',
@@ -288,6 +318,7 @@ class HubspotAspelContactSyncTest extends TestCase
             'phone' => 'Telefono',
             'rfc' => 'RFC',
             'clave' => 'Clave',
+            'fecha_alta' => 'Fecha alta',
             'version_sinc_aspel' => 'Version sinc ASPEL',
         ];
 
@@ -297,6 +328,7 @@ class HubspotAspelContactSyncTest extends TestCase
             'telefono' => 'Telefono',
             'rfc' => 'RFC',
             'clave' => 'Clave',
+            'fechaAlta' => 'Fecha alta',
         ];
 
         $createdHubspotProperties = [];
@@ -336,6 +368,16 @@ class HubspotAspelContactSyncTest extends TestCase
             ]);
         }
 
+        PropertyRelationship::query()->create([
+            'event_id' => $mappingEvent->id,
+            'property_id' => $createdHubspotProperties['fecha_alta']->id,
+            'related_property_id' => $createdAspelProperties['fechaAlta']->id,
+            'meta' => [
+                'transform' => 'hubspot_datetime_to_millis',
+            ],
+            'active' => true,
+        ]);
+
         return [$hubspotPlatform, $aspelPlatform, $mappingEvent, $syncEvent, $record];
     }
 
@@ -356,6 +398,7 @@ class HubspotAspelContactSyncTest extends TestCase
                 'rfc' => 'LOMJ850214H12',
                 'telefono' => '5551234567',
                 'emailEnvio' => 'juan.lopez@example.com',
+                'fechaAlta' => '2026-09-01T00:00:00',
                 'status' => 'A',
             ],
         ];

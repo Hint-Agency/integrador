@@ -83,7 +83,7 @@ class ProcessNextEventJob implements ShouldQueue
             return $payload;
         }
 
-        $objectId = trim((string) ($payload['objectId'] ?? $payload['id'] ?? ''));
+        $objectId = trim((string) ($payload['objectId'] ?? $payload['object_id'] ?? $payload['id'] ?? ''));
         if ($objectId === '') {
             $this->mergeRecordDetails([
                 'hubspot_enrichment' => [
@@ -173,7 +173,7 @@ class ProcessNextEventJob implements ShouldQueue
             $requested[] = $this->normalizeHubspotPropertyKey($sourceKey);
         }
 
-        $changedProperty = $payload['propertyName'] ?? null;
+        $changedProperty = $payload['propertyName'] ?? ($payload['property_name'] ?? null);
         if (is_scalar($changedProperty)) {
             $requested[] = $this->normalizeHubspotPropertyKey((string) $changedProperty);
         }

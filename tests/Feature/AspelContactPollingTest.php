@@ -394,19 +394,21 @@ class AspelContactPollingTest extends TestCase
             ],
             'error' => ['code' => null, 'message' => null, 'details' => null],
         ])->ordered();
-        $adapter->shouldReceive('send')->once()->andReturn([
-            'success' => false,
-            'status_code' => 404,
-            'retryable' => false,
-            'request_id' => 'req_detail_1',
-            'external_id' => '50902',
-            'latency_ms' => 8,
-            'attempt' => 1,
-            'endpoint' => 'https://api.example.com/api/contacts/50902',
-            'method' => 'GET',
-            'data' => [],
-            'error' => ['code' => 'not_found', 'message' => 'Contact not found', 'details' => ['clave' => '50902']],
-        ])->ordered();
+        $adapter->shouldReceive('send')->times(3)->andReturn(
+            [
+                'success' => false,
+                'status_code' => 404,
+                'retryable' => false,
+                'request_id' => 'req_detail_1',
+                'external_id' => '50902',
+                'latency_ms' => 8,
+                'attempt' => 1,
+                'endpoint' => 'https://api.example.com/api/contacts/50902',
+                'method' => 'GET',
+                'data' => [],
+                'error' => ['code' => 'not_found', 'message' => 'Contact not found', 'details' => ['clave' => '50902']],
+            ]
+        )->ordered();
 
         $service = new AspelService(
             $aspelPlatform,
@@ -421,6 +423,91 @@ class AspelContactPollingTest extends TestCase
         $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_ts')->first());
         $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.last_run_status')->first()?->value, 'value'));
         $this->assertSame('Failed to fetch ASPEL contact detail.', $result['message']);
+        $this->assertSame(3, data_get($result, 'data.failure_context.detail_response.retry_attempts'));
+    }
+
+    public function test_it_processes_create_fallback_synchronously_during_polling(): void
+    {
+        config()->set('hubspot.access_token', 'token_123');
+        config()->set('hubspot.base_url', 'https://api.hubapi.test');
+
+        [$aspelPlatform, $scheduleEvent, $record] = $this->preparePollingContext();
+
+        Http::fake(function (Request $request) {
+            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
+                return Http::response(['results' => []], 200);
+            }
+
+            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts') {
+                return Http::response([
+                    'id' => '503',
+                    'properties' => $request->data()['properties'] ?? [],
+                ], 201);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_changes_1',
+            'external_id' => null,
+            'latency_ms' => 10,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/contacts/changes',
+            'method' => 'GET',
+            'data' => [
+                'items' => [[
+                    'clave' => '50902',
+                    'nombre' => 'JUAN CARLOS LOPEZ MARTINEZ',
+                    'rfc' => 'LOMJ850214H12',
+                    'status' => 'A',
+                    'versionSinc' => '2026-05-07 10:00:00',
+                ]],
+                'nextSinceTs' => '2026-05-07 10:00:00',
+                'nextSinceClave' => '50902',
+                'hasMore' => false,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_detail_1',
+            'external_id' => '50902',
+            'latency_ms' => 8,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/contacts/50902',
+            'method' => 'GET',
+            'data' => [
+                'clave' => '50902',
+                'nombre' => 'JUAN CARLOS LOPEZ MARTINEZ',
+                'rfc' => 'LOMJ850214H12',
+                'telefono' => '5551234567',
+                'emailEnvio' => 'juan.lopez@example.com',
+                'status' => 'A',
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+
+        $service = new AspelService(
+            $aspelPlatform,
+            app(AuthStrategyResolver::class),
+            $scheduleEvent,
+            $record,
+        );
+
+        $result = $service->getUpdatedContacts([], $adapter);
+
+        $this->assertTrue($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $this->assertDatabaseHas('records', [
+            'status' => 'success',
+            'event_type' => 'object.created',
+        ]);
     }
 
     private function preparePollingContext(): array
@@ -450,11 +537,27 @@ class AspelContactPollingTest extends TestCase
             'active' => true,
         ]);
 
+        $hubspotCreateEvent = Event::query()->create([
+            'platform_id' => $hubspotPlatform->id,
+            'name' => 'Create ASPEL Contact In HubSpot',
+            'event_type_id' => 'object.created',
+            'method_name' => 'createAspelContactInHubspot',
+            'type' => 'webhook',
+            'meta' => [
+                'object_type' => 'contacts',
+                'target_platform' => 'aspel',
+                'response_mapping_event_id' => $mappingEvent->id,
+                'version_sinc_property' => 'version_sinc_aspel',
+            ],
+            'active' => true,
+        ]);
+
         $hubspotEvent = Event::query()->create([
             'platform_id' => $hubspotPlatform->id,
             'name' => 'Sync ASPEL Contact To HubSpot',
             'event_type_id' => 'object.updated',
-            'method_name' => 'syncAspelContactToHubspot',
+            'method_name' => 'updateAspelContactInHubspot',
+            'to_event_id' => $hubspotCreateEvent->id,
             'type' => 'webhook',
             'meta' => [
                 'object_type' => 'contacts',

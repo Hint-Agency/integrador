@@ -14,9 +14,18 @@ use App\Models\User;
 use App\Models\Property;
 use App\Models\Record;
 use Illuminate\Http\Request;
+use App\Services\EventProcessingService;
+use ReflectionClass;
+use ReflectionMethod;
+use Illuminate\Support\Str;
 
 class AdminPanelController extends Controller
 {
+    public function __construct(
+        protected EventProcessingService $eventProcessingService
+    ) {
+    }
+
     public function users()
     {
         $users = User::query()
@@ -104,38 +113,57 @@ class AdminPanelController extends Controller
         $platforms = Platform::query()
             ->where('active', true)
             ->orderBy('name')
-            ->get(['id', 'name', 'slug', 'type']);
+            ->get(['id', 'name', 'slug', 'type', 'settings', 'credentials']);
         $eventOptions = Event::query()
             ->orderBy('name')
             ->get(['id', 'name']);
 
         return inertia('Admin/Events', [
             'events' => $events,
-            'platforms' => $platforms,
+            'platforms' => $platforms->map(fn (Platform $platform): array => [
+                'id' => $platform->id,
+                'name' => $platform->name,
+                'slug' => $platform->slug,
+                'type' => $platform->type,
+            ])->values(),
             'event_options' => $eventOptions,
             'event_type_groups' => EventType::groupedOptions(),
+            'platform_method_options' => $this->buildPlatformMethodOptions($platforms),
         ]);
     }
 
     public function eventsCreate()
     {
+        $platforms = Platform::query()
+            ->where('active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'type', 'settings', 'credentials']);
+
         return inertia('Admin/EventsForm', [
             'mode' => 'create',
             'event' => null,
-            'platforms' => Platform::query()
-                ->where('active', true)
-                ->orderBy('name')
-                ->get(['id', 'name', 'slug', 'type']),
+            'platforms' => $platforms->map(fn (Platform $platform): array => [
+                'id' => $platform->id,
+                'name' => $platform->name,
+                'slug' => $platform->slug,
+                'type' => $platform->type,
+            ])->values(),
             'event_options' => Event::query()
                 ->orderBy('name')
                 ->get(['id', 'name']),
             'event_type_groups' => EventType::groupedOptions(),
+            'platform_method_options' => $this->buildPlatformMethodOptions($platforms),
         ]);
     }
 
     public function eventsEdit(Event $event)
     {
         $event->load(['platform:id,name,slug,type', 'to_event:id,name', 'httpConfig']);
+
+        $platforms = Platform::query()
+            ->where('active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'type', 'settings', 'credentials']);
 
         return inertia('Admin/EventsForm', [
             'mode' => 'edit',
@@ -181,16 +209,85 @@ class AdminPanelController extends Controller
                     'active' => (bool) $event->httpConfig->active,
                 ] : null,
             ],
-            'platforms' => Platform::query()
-                ->where('active', true)
-                ->orderBy('name')
-                ->get(['id', 'name', 'slug', 'type']),
+            'platforms' => $platforms->map(fn (Platform $platform): array => [
+                'id' => $platform->id,
+                'name' => $platform->name,
+                'slug' => $platform->slug,
+                'type' => $platform->type,
+            ])->values(),
             'event_options' => Event::query()
                 ->where('id', '!=', $event->id)
                 ->orderBy('name')
                 ->get(['id', 'name']),
             'event_type_groups' => EventType::groupedOptions(),
+            'platform_method_options' => $this->buildPlatformMethodOptions($platforms),
         ]);
+    }
+
+    private function buildPlatformMethodOptions($platforms): array
+    {
+        $options = [];
+
+        foreach ($platforms as $platform) {
+            $serviceClass = $this->eventProcessingService->getServiceClass($platform);
+            $options[(string) $platform->id] = $this->extractServiceMethodOptions($serviceClass);
+        }
+
+        return $options;
+    }
+
+    private function extractServiceMethodOptions(?string $serviceClass): array
+    {
+        if (! is_string($serviceClass) || ! class_exists($serviceClass)) {
+            return [];
+        }
+
+        $reflection = new ReflectionClass($serviceClass);
+        $methodOptions = collect($reflection->getMethods(ReflectionMethod::IS_PUBLIC))
+            ->filter(function (ReflectionMethod $method) use ($reflection): bool {
+                if ($method->isConstructor() || $method->isDestructor() || $method->isStatic()) {
+                    return false;
+                }
+
+                if ($method->getDeclaringClass()->getName() !== $reflection->getName()) {
+                    return false;
+                }
+
+                return ! in_array($method->getName(), $this->excludedEventMethodNames(), true)
+                    && ! Str::startsWith($method->getName(), '__');
+            })
+            ->map(fn (ReflectionMethod $method): array => [
+                'value' => $method->getName(),
+                'label' => $method->getName(),
+            ])
+            ->sortBy('label', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values()
+            ->all();
+
+        return $methodOptions;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function excludedEventMethodNames(): array
+    {
+        return [
+            'createRecord',
+            'createSuccessResponse',
+            'execute',
+            'executeEndpointCall',
+            'loadEvent',
+            'resolveAllowlistDomains',
+            'resolveAuthConfig',
+            'resolveAuthMode',
+            'resolveBody',
+            'resolveHeaders',
+            'resolveMethod',
+            'resolveQueryParams',
+            'resolveRetryPolicy',
+            'resolveTimeout',
+        ];
     }
 
     public function eventRelationships(Event $event)
