@@ -22,7 +22,7 @@ class MessageRuleResolver
                 continue;
             }
 
-            $conditions = is_array($rule->conditions) ? $rule->conditions : [];
+            $conditions = $this->normalizeConditions($rule->conditions);
             $matches = true;
 
             foreach ($conditions as $key => $expectedValue) {
@@ -44,5 +44,33 @@ class MessageRuleResolver
     private function matchesValue(mixed $expectedValue, mixed $actualValue): bool
     {
         return trim((string) ($expectedValue ?? '')) === trim((string) ($actualValue ?? ''));
+    }
+
+    private function normalizeConditions(mixed $conditions): array
+    {
+        if (! is_array($conditions)) {
+            return [];
+        }
+
+        if (array_is_list($conditions)) {
+            $normalized = [];
+
+            foreach ($conditions as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                $property = trim((string) ($item['property'] ?? ''));
+                if ($property === '') {
+                    continue;
+                }
+
+                $normalized[$property] = $item['value'] ?? null;
+            }
+
+            return $normalized;
+        }
+
+        return $conditions;
     }
 }

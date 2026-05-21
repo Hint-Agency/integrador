@@ -22,7 +22,7 @@ class MessageRuleManagementController extends Controller
             'priority' => (int) ($data['priority'] ?? 100),
             'trigger_property' => $data['trigger_property'],
             'trigger_value' => $data['trigger_value'] ?? null,
-            'conditions' => $data['conditions'] ?? [],
+            'conditions' => $this->normalizeConditions($data['conditions'] ?? []),
             'active' => (bool) ($data['active'] ?? true),
         ]);
 
@@ -40,7 +40,7 @@ class MessageRuleManagementController extends Controller
             'priority' => (int) ($data['priority'] ?? 100),
             'trigger_property' => $data['trigger_property'],
             'trigger_value' => $data['trigger_value'] ?? null,
-            'conditions' => $data['conditions'] ?? [],
+            'conditions' => $this->normalizeConditions($data['conditions'] ?? []),
             'active' => (bool) ($data['active'] ?? false),
         ]);
 
@@ -67,7 +67,41 @@ class MessageRuleManagementController extends Controller
             'trigger_property' => ['required', 'string', 'max:255'],
             'trigger_value' => ['nullable', 'string', 'max:255'],
             'conditions' => ['sometimes', 'array'],
+            'conditions.*.property' => ['nullable', 'string', 'max:255'],
+            'conditions.*.value' => ['nullable', 'string', 'max:255'],
             'active' => ['sometimes', 'boolean'],
         ]);
+    }
+
+    private function normalizeConditions(array $conditions): array
+    {
+        if (array_is_list($conditions)) {
+            $normalized = [];
+
+            foreach ($conditions as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                $property = trim((string) ($item['property'] ?? ''));
+                if ($property === '') {
+                    continue;
+                }
+
+                $normalized[$property] = trim((string) ($item['value'] ?? ''));
+            }
+
+            return $normalized;
+        }
+
+        return collect($conditions)
+            ->mapWithKeys(function (mixed $value, string|int $property): array {
+                $key = trim((string) $property);
+
+                return $key === ''
+                    ? []
+                    : [$key => trim((string) ($value ?? ''))];
+            })
+            ->all();
     }
 }

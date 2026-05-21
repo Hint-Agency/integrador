@@ -15,6 +15,14 @@ const showHubspotCredentials = ref(!isEdit.value || !props.connection?.has_webho
 const showTrebleCredentials = ref(!isEdit.value || !props.connection?.has_credentials);
 const isHubspot = computed(() => form.platform_type === 'hubspot');
 const isTreble = computed(() => form.platform_type === 'treble');
+const defaultHubspotProperties = [
+    'firstname',
+    'lastname',
+    'phone',
+    'campus_de_interes',
+    'nivel_escolar_de_interes',
+    'plantilla_de_whatsapp',
+];
 const form = useForm({
     name: props.connection?.name ?? '',
     slug: props.connection?.slug ?? '',
@@ -26,26 +34,14 @@ const form = useForm({
     api_key: '',
     username: '',
     password: '',
-    contact_properties_text: JSON.stringify(props.connection?.settings?.contact_properties ?? [
-        'firstname',
-        'lastname',
-        'phone',
-        'campus_de_interes',
-        'nivel_escolar_de_interes',
-        'plantilla_de_whatsapp',
-    ], null, 2),
+    contact_properties: (props.connection?.settings?.contact_properties ?? defaultHubspotProperties).map((property) => ({
+        value: String(property ?? ''),
+    })),
     send_path: props.connection?.settings?.send_path ?? '',
     http_method: props.connection?.settings?.http_method ?? 'POST',
     auth_mode: props.connection?.settings?.auth_mode ?? 'authorization_header',
     api_key_header: props.connection?.settings?.api_key_header ?? 'X-API-Key',
     country_code_default: props.connection?.settings?.country_code_default ?? '52',
-    request_template_text: JSON.stringify(props.connection?.settings?.request_template ?? {
-        name: '{{contact.firstname}}',
-        campus: '{{contact.campus_de_interes}}',
-        last_name: '{{contact.lastname}}',
-        first_name: '{{contact.firstname}}',
-        school_level: '{{contact.nivel_escolar_de_interes}}',
-    }, null, 2),
     headers_text: JSON.stringify(props.connection?.settings?.headers ?? {}, null, 2),
     timeout_seconds: props.connection?.settings?.timeout_seconds ?? 20,
     active: props.connection?.active ?? true,
@@ -137,13 +133,15 @@ const copyText = async (value, label) => {
 };
 
 const submit = () => {
-    const contactProperties = parseJsonField('contact_properties_text', '[]');
     const headers = parseJsonField('headers_text', '{}');
-    const requestTemplate = parseJsonField('request_template_text', '{}');
 
-    if (contactProperties === null || headers === null || requestTemplate === null) {
+    if (headers === null) {
         return;
     }
+
+    const contactProperties = form.contact_properties
+        .map((property) => String(property?.value ?? '').trim())
+        .filter(Boolean);
 
     const payload = {
         name: form.name,
@@ -166,7 +164,6 @@ const submit = () => {
             auth_mode: form.auth_mode || null,
             api_key_header: form.api_key_header || null,
             country_code_default: form.country_code_default || '52',
-            request_template: requestTemplate,
             headers,
             timeout_seconds: Number(form.timeout_seconds || 20),
         },
@@ -184,6 +181,19 @@ const submit = () => {
     }
 
     form.post(`/admin/clients/${props.client.id}/connections`);
+};
+
+const addContactProperty = () => {
+    form.contact_properties.push({ value: '' });
+};
+
+const removeContactProperty = (index) => {
+    if (form.contact_properties.length === 1) {
+        form.contact_properties[0].value = '';
+        return;
+    }
+
+    form.contact_properties.splice(index, 1);
 };
 </script>
 
@@ -257,7 +267,24 @@ const submit = () => {
                         >
                     </label>
                 </div>
-                <label><span>Propiedades HubSpot a leer</span><textarea v-model="form.contact_properties_text" rows="8"></textarea></label>
+                <div class="repeater-block">
+                    <div class="repeater-header">
+                        <div>
+                            <span class="repeater-title">Propiedades HubSpot a leer</span>
+                            <small class="hint">Se consultarán en cada lectura del contacto antes de resolver la regla.</small>
+                        </div>
+                        <button type="button" class="ghost-button" @click="addContactProperty">Agregar propiedad</button>
+                    </div>
+                    <div class="repeater-list">
+                        <div v-for="(property, index) in form.contact_properties" :key="`hubspot-property-${index}`" class="repeater-row">
+                            <label class="repeater-input">
+                                <span>Propiedad {{ index + 1 }}</span>
+                                <input v-model="property.value" type="text" placeholder="plantilla_de_whatsapp">
+                            </label>
+                            <button type="button" class="ghost-button danger-button" @click="removeContactProperty(index)">Quitar</button>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <section v-if="isTreble" class="section">
@@ -374,11 +401,6 @@ const submit = () => {
                     </button>
                 </div>
                 <label><span>Headers JSON</span><textarea v-model="form.headers_text" rows="8" placeholder='{"X-Workspace":"abc"}'></textarea></label>
-                <label>
-                    <span>Request template JSON</span>
-                    <textarea v-model="form.request_template_text" rows="12" placeholder='{"name":"{{contact.firstname}}","campus":"{{contact.campus_de_interes}}"}'></textarea>
-                    <small class="hint">Cada entrada se enviará a Treble como un item de <code>user_session_keys</code>.</small>
-                </label>
             </section>
 
             <div class="actions">
@@ -447,6 +469,38 @@ span { color: #334155; font-size: 14px; }
     font-size: 12px;
     color: #b91c1c;
 }
+.repeater-block {
+    display: grid;
+    gap: 12px;
+}
+.repeater-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+.repeater-title {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: #0f172a;
+}
+.repeater-list {
+    display: grid;
+    gap: 10px;
+}
+.repeater-row {
+    display: flex;
+    align-items: end;
+    gap: 10px;
+}
+.repeater-input {
+    flex: 1;
+}
+.danger-button {
+    color: #b91c1c;
+    border-color: #fecaca;
+}
 .ghost-button {
     border: 1px solid #cbd5e1;
     border-radius: 8px;
@@ -506,4 +560,11 @@ input, select, textarea { width: 100%; border: 1px solid #cbd5e1; border-radius:
 .actions { display: flex; gap: 10px; }
 .actions a, .actions button { border: 1px solid #cbd5e1; border-radius: 8px; padding: 9px 14px; background: #fff; color: #334155; text-decoration: none; }
 .actions button { background: #2563eb; border-color: #2563eb; color: #fff; cursor: pointer; }
+@media (max-width: 768px) {
+    .repeater-header,
+    .repeater-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
 </style>

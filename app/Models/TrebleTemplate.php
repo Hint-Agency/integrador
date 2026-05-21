@@ -18,11 +18,13 @@ class TrebleTemplate extends Model
         'name',
         'external_template_id',
         'payload_mapping',
+        'request_template',
         'active',
     ];
 
     protected $casts = [
         'payload_mapping' => 'array',
+        'request_template' => 'array',
         'active' => 'boolean',
     ];
 

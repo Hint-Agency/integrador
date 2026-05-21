@@ -22,7 +22,8 @@ class TrebleStatusWebhookService
         $externalId = trim((string) Arr::get($payload, 'session.external_id', ''));
         $timestamp = trim((string) Arr::get($payload, 'timestamp', ''));
         $closedAt = trim((string) Arr::get($payload, 'session.closed_at', ''));
-        $phone = $this->normalizePhone((string) Arr::get($payload, 'user.cellphone', ''));
+        $countryCode = (string) Arr::get($payload, 'user.country_code', ($connection->settings['country_code_default'] ?? '52'));
+        $phone = $this->normalizePhone((string) Arr::get($payload, 'user.cellphone', ''), $countryCode);
         $hsmName = trim((string) Arr::get($payload, 'hsm.name', ''));
 
         if ($eventId === '' || $eventType === '') {
@@ -34,19 +35,20 @@ class TrebleStatusWebhookService
         }
 
         $record = $this->findMatchingRecord($client->id, $externalId, $phone, $hsmName);
+        $callbackRecord = $this->eventLoggingService->createEventRecord(
+            'treble.status.callback',
+            $record ? 'success' : 'warning',
+            $payload,
+            $record
+                ? 'Treble status callback received and matched.'
+                : 'Treble status callback received without match.',
+            null,
+            null,
+            $client->id
+        );
 
         if (! $record) {
-            $warning = $this->eventLoggingService->createEventRecord(
-                'treble.status.unmatched',
-                'warning',
-                $payload,
-                'Treble status callback could not be matched to an existing record.',
-                null,
-                null,
-                $client->id
-            );
-
-            $warning->update([
+            $callbackRecord->update([
                 'details' => [
                     'reason' => 'unmatched_external_id',
                     'event_id' => $eventId,
@@ -61,6 +63,7 @@ class TrebleStatusWebhookService
                 'success' => true,
                 'status_code' => 200,
                 'matched' => false,
+                'record_id' => $callbackRecord->id,
             ];
         }
 
@@ -70,12 +73,25 @@ class TrebleStatusWebhookService
 
         foreach ($history as $entry) {
             if (($entry['event_id'] ?? null) === $eventId) {
+                $callbackRecord->update([
+                    'details' => [
+                        'event_id' => $eventId,
+                        'event_type' => $eventType,
+                        'external_id' => $externalId !== '' ? $externalId : null,
+                        'phone' => $phone !== '' ? $phone : null,
+                        'template_name' => $hsmName !== '' ? $hsmName : null,
+                        'matched_record_id' => $record->id,
+                        'duplicate' => true,
+                    ],
+                ]);
+
                 return [
                     'success' => true,
                     'status_code' => 200,
                     'matched' => true,
                     'duplicate' => true,
                     'record_id' => $record->id,
+                    'callback_record_id' => $callbackRecord->id,
                 ];
             }
         }
@@ -105,11 +121,24 @@ class TrebleStatusWebhookService
             'details' => $details,
         ]);
 
+        $callbackRecord->update([
+            'details' => [
+                'event_id' => $eventId,
+                'event_type' => $eventType,
+                'external_id' => $externalId !== '' ? $externalId : null,
+                'phone' => $phone !== '' ? $phone : null,
+                'template_name' => $hsmName !== '' ? $hsmName : null,
+                'matched_record_id' => $record->id,
+                'closed_at' => $closedAt !== '' ? $closedAt : null,
+            ],
+        ]);
+
         return [
             'success' => true,
             'status_code' => 200,
             'matched' => true,
             'record_id' => $record->id,
+            'callback_record_id' => $callbackRecord->id,
         ];
     }
 
@@ -137,7 +166,8 @@ class TrebleStatusWebhookService
         return Record::query()
             ->where('client_id', $clientId)
             ->where(function ($query) use ($phone): void {
-                $query->where('details->treble_request->phone', $phone)
+                $query->where('details->treble_request->phone_normalized', $phone)
+                    ->orWhere('details->treble_request->phone', $phone)
                     ->orWhere('details->contact_properties->phone', $phone)
                     ->orWhere('details->contact_properties->mobilephone', $phone);
             })
@@ -151,8 +181,27 @@ class TrebleStatusWebhookService
             ->first();
     }
 
-    private function normalizePhone(string $phone): string
+    private function normalizePhone(string $phone, string $countryCode = '52'): string
     {
-        return preg_replace('/\D+/', '', $phone) ?? '';
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        $normalizedCountryCode = preg_replace('/\D+/', '', $countryCode) ?: '52';
+
+        if ($digits === '') {
+            return '';
+        }
+
+        if (str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
+        }
+
+        if (str_starts_with($digits, $normalizedCountryCode)) {
+            $digits = substr($digits, strlen($normalizedCountryCode));
+        }
+
+        if (strlen($digits) === 11 && str_starts_with($digits, '1')) {
+            $digits = substr($digits, 1);
+        }
+
+        return ltrim($digits, '0');
     }
 }

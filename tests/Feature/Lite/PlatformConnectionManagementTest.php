@@ -59,11 +59,6 @@ class PlatformConnectionManagementTest extends TestCase
                 'auth_mode' => 'bearer_api_key',
                 'api_key_header' => 'X-API-Key',
                 'country_code_default' => '52',
-                'request_template' => [
-                    'user_session_keys' => [
-                        ['key' => 'name', 'value' => '{{contact.firstname}}'],
-                    ],
-                ],
                 'headers' => [],
                 'timeout_seconds' => 20,
             ],
@@ -119,11 +114,6 @@ class PlatformConnectionManagementTest extends TestCase
                 'auth_mode' => 'bearer_api_key',
                 'api_key_header' => 'X-API-Key',
                 'country_code_default' => '52',
-                'request_template' => [
-                    'user_session_keys' => [
-                        ['key' => 'name', 'value' => '{{contact.firstname}}'],
-                    ],
-                ],
                 'headers' => [],
                 'timeout_seconds' => 20,
             ],

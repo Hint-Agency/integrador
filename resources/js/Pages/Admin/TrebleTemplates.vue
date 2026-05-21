@@ -27,6 +27,7 @@ const destroyTemplate = (template) => {
                 <div>
                     <strong>{{ template.name }}</strong>
                     <p>ID externo: {{ template.external_template_id }}</p>
+                    <small>{{ Object.keys(template.request_template || {}).length }} variable(s) configurada(s)</small>
                 </div>
                 <div class="actions">
                     <Link :href="`/admin/clients/${client.id}/templates/${template.id}/edit`">Editar</Link>

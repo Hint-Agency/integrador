@@ -95,14 +95,6 @@ class LiteSeedClientCommand extends Command
                 'api_key_header' => 'X-API-Key',
                 'timeout_seconds' => 20,
                 'headers' => [],
-                'request_template' => [
-                    'template_id' => '{{template.external_template_id}}',
-                    'phone' => '{{contact.phone}}',
-                    'first_name' => '{{contact.firstname}}',
-                    'last_name' => '{{contact.lastname}}',
-                    'campus' => '{{contact.campus_de_interes}}',
-                    'school_level' => '{{contact.nivel_escolar_de_interes}}',
-                ],
             ]),
             'active' => ! (bool) $this->option('inactive-treble'),
         ]);

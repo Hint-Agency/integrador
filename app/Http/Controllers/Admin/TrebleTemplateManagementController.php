@@ -19,6 +19,7 @@ class TrebleTemplateManagementController extends Controller
             'name' => $data['name'],
             'external_template_id' => $data['external_template_id'],
             'payload_mapping' => $data['payload_mapping'] ?? [],
+            'request_template' => $data['request_template'] ?? [],
             'active' => (bool) ($data['active'] ?? true),
         ]);
 
@@ -34,6 +35,7 @@ class TrebleTemplateManagementController extends Controller
             'name' => $data['name'],
             'external_template_id' => $data['external_template_id'],
             'payload_mapping' => $data['payload_mapping'] ?? [],
+            'request_template' => $data['request_template'] ?? [],
             'active' => (bool) ($data['active'] ?? false),
         ]);
 
@@ -54,6 +56,7 @@ class TrebleTemplateManagementController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'external_template_id' => ['required', 'string', 'max:255'],
             'payload_mapping' => ['sometimes', 'array'],
+            'request_template' => ['sometimes', 'array'],
             'active' => ['sometimes', 'boolean'],
         ]);
     }

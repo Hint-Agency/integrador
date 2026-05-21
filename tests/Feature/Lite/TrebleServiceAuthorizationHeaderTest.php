@@ -41,7 +41,7 @@ class TrebleServiceAuthorizationHeaderTest extends TestCase
             'client_id' => $client->id,
             'name' => 'Bienvenida',
             'external_template_id' => '1276100',
-            'payload_mapping' => [
+            'request_template' => [
                 'user_session_keys' => [
                     ['key' => 'name', 'value' => 'Carlos'],
                 ],
@@ -87,12 +87,6 @@ class TrebleServiceAuthorizationHeaderTest extends TestCase
                 'send_path' => '/deployment/api/poll/{poll_id}',
                 'auth_mode' => 'authorization_header',
                 'country_code_default' => '52',
-                'request_template' => [
-                    'name' => '{{contact.firstname}}',
-                    'campus' => '{{contact.campus_de_interes}}',
-                    'template_id' => '{{template.external_template_id}}',
-                    'school_level' => '{{contact.nivel_escolar_de_interes}}',
-                ],
             ],
             'active' => true,
         ]);
@@ -101,7 +95,12 @@ class TrebleServiceAuthorizationHeaderTest extends TestCase
             'client_id' => $client->id,
             'name' => 'Bienvenida',
             'external_template_id' => '1276100',
-            'payload_mapping' => [],
+            'request_template' => [
+                'name' => '{{contact.firstname}}',
+                'campus' => '{{contact.campus_de_interes}}',
+                'template_id' => '{{template.external_template_id}}',
+                'school_level' => '{{contact.nivel_escolar_de_interes}}',
+            ],
             'active' => true,
         ]);
 

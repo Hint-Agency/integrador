@@ -131,6 +131,7 @@ class LiteAdminController extends Controller
                     'name' => $template->name,
                     'external_template_id' => $template->external_template_id,
                     'payload_mapping' => $template->payload_mapping ?? [],
+                    'request_template' => $template->request_template ?? [],
                     'active' => (bool) $template->active,
                 ];
             });
@@ -162,6 +163,7 @@ class LiteAdminController extends Controller
                 'name' => $template->name,
                 'external_template_id' => $template->external_template_id,
                 'payload_mapping' => $template->payload_mapping ?? [],
+                'request_template' => $template->request_template ?? [],
                 'active' => (bool) $template->active,
             ],
         ]);
@@ -182,6 +184,11 @@ class LiteAdminController extends Controller
                     'trigger_property' => $rule->trigger_property,
                     'trigger_value' => $rule->trigger_value,
                     'conditions' => $rule->conditions ?? [],
+                    'conditions_list' => collect($rule->conditions ?? [])
+                        ->map(fn (mixed $value, string|int $property) => [
+                            'property' => (string) $property,
+                            'value' => is_scalar($value) ? (string) $value : '',
+                        ])->values()->all(),
                     'active' => (bool) $rule->active,
                     'treble_template_id' => $rule->treble_template_id,
                     'treble_template' => $rule->trebleTemplate ? [
@@ -223,6 +230,11 @@ class LiteAdminController extends Controller
                 'trigger_property' => $rule->trigger_property,
                 'trigger_value' => $rule->trigger_value,
                 'conditions' => $rule->conditions ?? [],
+                'conditions_list' => collect($rule->conditions ?? [])
+                    ->map(fn (mixed $value, string|int $property) => [
+                        'property' => (string) $property,
+                        'value' => is_scalar($value) ? (string) $value : '',
+                    ])->values()->all(),
                 'active' => (bool) $rule->active,
                 'treble_template_id' => $rule->treble_template_id,
             ],

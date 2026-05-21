@@ -90,7 +90,7 @@ class WebhookController extends Controller
         $payload = $request->all();
         $payloads = $this->extractPayloads($payload);
         $results = [];
-
+        \Log::info('Processing Treble status webhook callback', ['payload' => $payload, 'extracted_payloads' => $payloads]);
         foreach ($payloads as $item) {
             if (! is_array($item)) {
                 continue;

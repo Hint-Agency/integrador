@@ -117,7 +117,7 @@ class TrebleService
 
     private function resolveUserSessionKeys(PlatformConnection $connection, TrebleTemplate $template, array $contact, array $context): array
     {
-        $requestTemplate = $connection->settings['request_template'] ?? null;
+        $requestTemplate = $template->request_template ?? null;
         if (is_array($requestTemplate) && $requestTemplate !== []) {
             return $this->mapTemplateConfigToSessionKeys($requestTemplate, $template, $contact, $context);
         }

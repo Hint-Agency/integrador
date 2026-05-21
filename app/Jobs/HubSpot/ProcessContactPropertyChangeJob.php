@@ -140,6 +140,11 @@ class ProcessContactPropertyChangeJob implements ShouldQueue
                 'poll_id' => $rule->trebleTemplate->external_template_id,
                 'template_name' => $rule->trebleTemplate->name,
                 'phone' => preg_replace('/\D+/', '', (string) ($contactProperties['phone'] ?? $contactProperties['mobilephone'] ?? '')) ?: null,
+                'phone_normalized' => $this->normalizePhoneForTreble(
+                    (string) ($contactProperties['phone'] ?? $contactProperties['mobilephone'] ?? ''),
+                    (string) ($trebleConnection->settings['country_code_default'] ?? '52')
+                ),
+                'country_code' => preg_replace('/\D+/', '', (string) ($trebleConnection->settings['country_code_default'] ?? '52')) ?: '52',
             ],
             'treble_response' => $trebleResponse,
             'contact_properties' => $contactProperties,
@@ -193,5 +198,31 @@ class ProcessContactPropertyChangeJob implements ShouldQueue
         }
 
         return array_values(array_unique(array_merge($defaults, $configured)));
+    }
+
+    private function normalizePhoneForTreble(string $phone, string $countryCode = '52'): ?string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        $normalizedCountryCode = preg_replace('/\D+/', '', $countryCode) ?: '52';
+
+        if ($digits === '') {
+            return null;
+        }
+
+        if (str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
+        }
+
+        if (str_starts_with($digits, $normalizedCountryCode)) {
+            $digits = substr($digits, strlen($normalizedCountryCode));
+        }
+
+        if (strlen($digits) === 11 && str_starts_with($digits, '1')) {
+            $digits = substr($digits, 1);
+        }
+
+        $digits = ltrim($digits, '0');
+
+        return $digits !== '' ? $digits : null;
     }
 }

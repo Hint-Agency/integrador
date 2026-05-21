@@ -54,7 +54,7 @@ class ClientWebhookProcessingTest extends TestCase
             'client_id' => $client->id,
             'name' => 'Bienvenida La Paz',
             'external_template_id' => 'tpl-001',
-            'payload_mapping' => [
+            'request_template' => [
                 'template_id' => '{{template.external_template_id}}',
                 'phone' => '{{contact.phone}}',
             ],
@@ -126,14 +126,14 @@ class ClientWebhookProcessingTest extends TestCase
             'client_id' => $client->id,
             'name' => 'Low Priority',
             'external_template_id' => 'tpl-low',
-            'payload_mapping' => ['template_id' => '{{template.external_template_id}}'],
+            'request_template' => ['template_id' => '{{template.external_template_id}}'],
             'active' => true,
         ]);
         $templateTwo = TrebleTemplate::query()->create([
             'client_id' => $client->id,
             'name' => 'High Priority',
             'external_template_id' => 'tpl-high',
-            'payload_mapping' => ['template_id' => '{{template.external_template_id}}'],
+            'request_template' => ['template_id' => '{{template.external_template_id}}'],
             'active' => true,
         ]);
 
@@ -176,7 +176,7 @@ class ClientWebhookProcessingTest extends TestCase
             'client_id' => $client->id,
             'name' => 'Error Template',
             'external_template_id' => 'tpl-error',
-            'payload_mapping' => ['template_id' => '{{template.external_template_id}}'],
+            'request_template' => ['template_id' => '{{template.external_template_id}}'],
             'active' => true,
         ]);
 
@@ -258,10 +258,6 @@ class ClientWebhookProcessingTest extends TestCase
             'settings' => [
                 'send_path' => '/messages/send',
                 'auth_mode' => 'bearer_api_key',
-                'request_template' => [
-                    'template_id' => '{{template.external_template_id}}',
-                    'phone' => '{{contact.phone}}',
-                ],
             ],
             'active' => true,
         ]);
