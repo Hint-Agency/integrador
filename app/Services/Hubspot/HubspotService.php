@@ -782,6 +782,125 @@ class HubspotService extends BaseService
         ]);
     }
 
+    public function updateAspelProductInHubspot(array $payload): array
+    {
+        [$mappingEventId, $sourceData, $propertiesResult, $preparedError] = $this->prepareAspelHubspotProductSyncContext($payload);
+
+        if ($preparedError !== null || ($propertiesResult['success'] ?? false) === false) {
+            return $propertiesResult;
+        }
+
+        $resolvedProperties = $propertiesResult['properties'];
+        $matchResult = $this->findHubspotProductForAspelPayload($payload, $sourceData);
+        if (! ($matchResult['success'] ?? false)) {
+            return $matchResult;
+        }
+
+        if (($matchResult['multiple'] ?? false) === true) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'Multiple HubSpot products matched ASPEL change.',
+                'data' => [
+                    'warning_reason' => 'multiple_matches',
+                    'mapping_event_id' => $mappingEventId,
+                    'output_payload' => [],
+                    'matches' => $matchResult['matches'] ?? [],
+                    'match_property' => $matchResult['match_property'] ?? null,
+                ],
+            ];
+        }
+
+        if (($matchResult['found'] ?? false) !== true) {
+            $nextEventConfigured = $this->event?->to_event_id !== null;
+            $warningReason = $nextEventConfigured ? null : 'missing_create_fallback_event';
+
+            return [
+                'success' => true,
+                'status' => $warningReason ? 'warning' : null,
+                'message' => $warningReason
+                    ? 'ASPEL product was not found in HubSpot and no creation fallback event is configured.'
+                    : 'ASPEL product prepared for HubSpot creation fallback.',
+                'data' => [
+                    'operation' => 'not_found',
+                    'updated_count' => 0,
+                    'not_found_count' => 1,
+                    'warning_reason' => $warningReason,
+                    'mapping_event_id' => $mappingEventId,
+                    'output_payload' => $payload,
+                ],
+            ];
+        }
+
+        $productId = (string) $matchResult['product_id'];
+        $response = $this->hubspotApi->updateProduct($productId, $resolvedProperties);
+
+        if (! ($response['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to update HubSpot product from ASPEL change.',
+                'data' => [
+                    'error' => $response['error'] ?? null,
+                    'product_id' => $productId,
+                    'mapping_event_id' => $mappingEventId,
+                    'attempted_properties' => $resolvedProperties,
+                    'matched_by' => $matchResult['matched_by'] ?? null,
+                ],
+            ];
+        }
+
+        return $this->success('HubSpot product updated from ASPEL change.', [
+            'operation' => 'updated',
+            'updated_count' => 1,
+            'not_found_count' => 0,
+            'product_id' => $productId,
+            'matched_by' => $matchResult['matched_by'] ?? null,
+            'mapping_event_id' => $mappingEventId,
+            'updated_properties' => $resolvedProperties,
+            'hubspot_response' => $response['data'] ?? [],
+            'output_payload' => [],
+        ]);
+    }
+
+    public function createAspelProductInHubspot(array $payload): array
+    {
+        [$mappingEventId, $sourceData, $properties, $preparedError] = $this->prepareAspelHubspotProductSyncContext($payload);
+
+        if ($preparedError !== null) {
+            return $preparedError;
+        }
+
+        if (($properties['success'] ?? false) === false) {
+            return $properties;
+        }
+
+        $resolvedProperties = $properties['properties'];
+        $response = $this->hubspotApi->createProduct($resolvedProperties);
+
+        if (! ($response['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to create HubSpot product from ASPEL change.',
+                'data' => [
+                    'error' => $response['error'] ?? null,
+                    'mapping_event_id' => $mappingEventId,
+                    'attempted_properties' => $resolvedProperties,
+                ],
+            ];
+        }
+
+        return $this->success('HubSpot product created from ASPEL change.', [
+            'operation' => 'created',
+            'updated_count' => 0,
+            'not_found_count' => 0,
+            'product_id' => Arr::get($response, 'data.id'),
+            'mapping_event_id' => $mappingEventId,
+            'created_properties' => $resolvedProperties,
+            'hubspot_response' => $response['data'] ?? [],
+            'output_payload' => [],
+        ]);
+    }
+
     public function testConnection(): array
     {
         $token = config('hubspot.access_token');
@@ -1355,6 +1474,65 @@ class HubspotService extends BaseService
         ];
     }
 
+    /**
+     * @return array{0:?int,1:array,2:array{success:bool,properties?:array,message?:string,data?:array},3:?array}
+     */
+    private function prepareAspelHubspotProductSyncContext(array $payload): array
+    {
+        $mappingEventId = $this->resolveAspelMappingEventId($payload);
+        $sourceData = Arr::get($payload, 'aspel_detail', []);
+
+        if (! is_array($sourceData) || $sourceData === []) {
+            return [
+                $mappingEventId,
+                [],
+                [
+                    'success' => false,
+                    'message' => 'Missing ASPEL product detail payload for HubSpot sync.',
+                    'data' => [
+                        'mapping_event_id' => $mappingEventId,
+                        'received_keys' => array_keys($payload),
+                    ],
+                ],
+                [
+                    'success' => false,
+                    'message' => 'Missing ASPEL product detail payload for HubSpot sync.',
+                ],
+            ];
+        }
+
+        $properties = $this->buildHubspotContactPropertiesFromSource($mappingEventId, $sourceData);
+
+        if ($properties === []) {
+            return [
+                $mappingEventId,
+                $sourceData,
+                [
+                    'success' => false,
+                    'message' => 'No mapped HubSpot properties found for ASPEL product sync.',
+                    'data' => [
+                        'mapping_event_id' => $mappingEventId,
+                        'source_keys' => array_keys($sourceData),
+                    ],
+                ],
+                [
+                    'success' => false,
+                    'message' => 'No mapped HubSpot properties found for ASPEL product sync.',
+                ],
+            ];
+        }
+
+        return [
+            $mappingEventId,
+            $sourceData,
+            [
+                'success' => true,
+                'properties' => $properties,
+            ],
+            null,
+        ];
+    }
+
     private function findHubspotContactForAspelPayload(array $payload, array $sourceData): array
     {
         $strategies = [
@@ -1435,6 +1613,79 @@ class HubspotService extends BaseService
                     'matched_by' => $propertyName,
                 ];
             }
+        }
+
+        return [
+            'success' => true,
+            'found' => false,
+            'matched_by' => null,
+        ];
+    }
+
+    private function findHubspotProductForAspelPayload(array $payload, array $sourceData): array
+    {
+        $clave = $this->resolveScalarPayloadValue([
+            Arr::get($payload, 'clave'),
+            Arr::get($sourceData, 'clave'),
+            Arr::get($sourceData, 'CLAVE'),
+        ]);
+
+        if ($clave === null) {
+            return [
+                'success' => true,
+                'found' => false,
+                'matched_by' => null,
+            ];
+        }
+
+        $response = $this->hubspotApi->searchObjectByProperty('products', 'clave', $clave, [
+            'clave',
+            'name',
+        ]);
+
+        if (! ($response['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to search HubSpot product for ASPEL change.',
+                'match_property' => 'clave',
+                'match_value' => $clave,
+                'data' => [
+                    'match_property' => 'clave',
+                    'match_value' => $clave,
+                    'error' => $response['error'] ?? null,
+                ],
+            ];
+        }
+
+        $results = Arr::get($response, 'data.results', []);
+        if (! is_array($results)) {
+            $results = [];
+        }
+
+        if (count($results) > 1) {
+            return [
+                'success' => true,
+                'found' => false,
+                'multiple' => true,
+                'match_property' => 'clave',
+                'match_value' => $clave,
+                'matches' => array_map(
+                    static fn (array $result): array => [
+                        'id' => $result['id'] ?? null,
+                        'properties' => $result['properties'] ?? [],
+                    ],
+                    $results
+                ),
+            ];
+        }
+
+        if (count($results) === 1) {
+            return [
+                'success' => true,
+                'found' => true,
+                'product_id' => (string) ($results[0]['id'] ?? ''),
+                'matched_by' => 'clave',
+            ];
         }
 
         return [

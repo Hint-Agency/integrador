@@ -449,6 +449,7 @@ Las siguientes capacidades existen en `/Users/hint/laravel-sites/integrador` y D
 - El sistema DEBE soportar sincronizacion programada de contactos modificados en ASPEL SAE mediante polling por cursor persistente.
 - El contrato minimo esperado de ASPEL es:
   - `GET /api/contacts/changes?sinceTs={isoDateTime}&sinceClave={clave}&take={n}`
+  - `GET /api/products/changes?sinceTs={isoDateTime}&sinceClave={clave}&take={n}`
   - `GET /api/contacts/{clave}`
 - El endpoint `changes` DEBE tratarse como fuente oficial de:
   - cursor (`nextSinceTs`, `nextSinceClave`)
@@ -472,6 +473,7 @@ Las siguientes capacidades existen en `/Users/hint/laravel-sites/integrador` y D
 - Defaults del primer arranque:
   - `sinceTs = now - 24h`
   - `sinceClave = ""`
+  - productos ASPEL siguen el mismo patrón de cursor persistente que contactos
 - Regla critica:
   - si falla cualquier item del batch, el cursor NO debe avanzar
   - si `hasMore = true`, el mismo run debe seguir procesando inmediatamente

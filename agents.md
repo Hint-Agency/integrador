@@ -33,6 +33,7 @@ Construir un sistema de integración multiplataforma que sincronice datos entre 
 11. En errores de sincronización de contactos relacionados con HubSpot, intentar registrar una nota visible en el objeto HubSpot afectado y guardar el resultado en `Record.details.hubspot_note`.
 12. Modelar sincronizaciones manuales/controladas por plataforma usando propiedades técnicas `sync_to_{platform}` y write-back de estado técnico en HubSpot.
 13. Soportar polling programado de contactos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc` y matching por `clave`, `rfc`, `phone`, `email`.
+14. Soportar polling programado de productos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc`, detalle por `clave` y matching de producto por `clave`.
 
 ### 2.4 Límites
 1. No inventar endpoints, credenciales o comportamientos no descritos.
@@ -100,6 +101,7 @@ Si falta información, detente y pide aclaración. Convierte eventos que puedan 
 - Seeder bootstrap de `superadmin` obligatorio.
 - Notas operativas de fallo en contactos HubSpot con resultado almacenado en `Record.details.hubspot_note`.
 - Polling programado de contactos ASPEL con cursor persistente en `configs`, detalle por `clave` y sincronización create/update hacia HubSpot.
+- Polling programado de productos ASPEL con cursor persistente en `configs`, detalle por `clave` y sincronización update/create hacia HubSpot.
 
 ---
 
@@ -362,6 +364,7 @@ Models
 - Propiedades técnicas por plataforma: para HubSpot -> plataforma externa, se debe favorecer el patrón `sync_to_{platform}`, `sync_status_{platform}`, `last_sync_{platform}`, `{platform}_id`, `last_error_{platform}`.
 - Triggers por plataforma: el disparo de sincronización controlada debe configurarse sobre `sync_to_{platform} = pending`, no sobre cada propiedad de negocio individual.
 - Polling ASPEL -> HubSpot: el flujo programado debe usar `sinceTs` y `sinceClave` persistidos en `configs`, idempotencia por `clave + versionSinc`, fetch de detalle por `GET /api/contacts/{clave}`, matching HubSpot en orden `clave -> rfc -> phone -> email`, y create cuando no exista coincidencia.
+- Polling ASPEL productos -> HubSpot: el flujo programado debe usar `sinceTs` y `sinceClave` persistidos en `configs`, idempotencia por `clave + versionSinc`, fetch de detalle por `GET /api/products/{clave}`, matching HubSpot por `clave`, update si existe y create si no existe coincidencia.
 
 ## 8) Contratos clave (Interfaces)
 ### 8.1 EventProcessingService
