@@ -5,17 +5,16 @@ namespace App\Services;
 use App\Models\Event;
 use App\Models\Record;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
 
 class EventFlowService
 {
     public function __construct(
         protected EventLoggingService $eventLoggingService,
         protected EventProcessingService $eventProcessingService
-    ) {
-    }
+    ) {}
 
     /**
      * Ejecuta un flujo completo de eventos.
@@ -37,6 +36,7 @@ class EventFlowService
             $result = $this->executeEventInFlow($rootEvent, $flowContext, $parentRecord);
             if (! $result['success']) {
                 DB::rollBack();
+
                 return $result;
             }
 
@@ -62,7 +62,7 @@ class EventFlowService
 
             return [
                 'success' => false,
-                'message' => 'Event flow execution failed: ' . $exception->getMessage(),
+                'message' => 'Event flow execution failed: '.$exception->getMessage(),
                 'executed_events' => [],
                 'final_data' => $initialData,
                 'errors' => [$exception->getMessage()],
@@ -217,6 +217,7 @@ class EventFlowService
                 'parent_event_id' => $parentEvent->id,
                 'next_event_id' => $nextEvent->id,
             ]);
+
             return;
         }
 
@@ -278,8 +279,15 @@ class EventFlowService
                 continue;
             }
 
+            $catalogValue = $this->resolveCatalogMappingValue($relationship->meta, $event, $value);
+            if (($catalogValue['matched'] ?? false) === false) {
+                Arr::forget($transformed, $targetKey);
+
+                continue;
+            }
+
             $targetType = $relationship->relatedProperty?->type;
-            $transformedValue = $this->castValue($value, $targetType);
+            $transformedValue = $this->castValue($catalogValue['value'], $targetType);
 
             if ($targetType === 'file') {
                 $transformedValue = $this->resolveFilePayload($value);
@@ -289,6 +297,73 @@ class EventFlowService
         }
 
         return $transformed;
+    }
+
+    private function resolveCatalogMappingValue(?array $meta, Event $event, mixed $value): array
+    {
+        $catalogConfig = $meta['catalog'] ?? null;
+        if (! is_array($catalogConfig)) {
+            return [
+                'matched' => true,
+                'value' => $value,
+            ];
+        }
+
+        $catalogPath = $catalogConfig['path'] ?? null;
+        if (! is_string($catalogPath) || trim($catalogPath) === '') {
+            return [
+                'matched' => true,
+                'value' => $value,
+            ];
+        }
+
+        $platform = match ($catalogConfig['platform'] ?? 'source') {
+            'target', 'event' => $event->to_event?->platform ?? $event->platform,
+            default => $event->platform,
+        };
+
+        $catalog = data_get($platform?->settings ?? [], trim($catalogPath));
+        if (! is_array($catalog)) {
+            return [
+                'matched' => false,
+                'value' => null,
+            ];
+        }
+
+        return $this->catalogLookup($catalog, $value, (string) ($catalogConfig['match'] ?? 'value'), (string) ($catalogConfig['output'] ?? 'key'));
+    }
+
+    private function catalogLookup(array $catalog, mixed $value, string $match, string $output): array
+    {
+        foreach ($catalog as $key => $catalogValue) {
+            $candidate = $match === 'key' ? $key : $catalogValue;
+            if (! $this->catalogValuesAreEqual($candidate, $value)) {
+                continue;
+            }
+
+            return [
+                'matched' => true,
+                'value' => $output === 'value' ? $catalogValue : $key,
+            ];
+        }
+
+        return [
+            'matched' => false,
+            'value' => null,
+        ];
+    }
+
+    private function catalogValuesAreEqual(mixed $left, mixed $right): bool
+    {
+        if (is_numeric($left) && is_numeric($right)) {
+            return (string) (int) $left === (string) (int) $right;
+        }
+
+        if (! is_scalar($left) || ! is_scalar($right)) {
+            return false;
+        }
+
+        return mb_strtolower(trim((string) $left)) === mb_strtolower(trim((string) $right));
     }
 
     /**
@@ -337,7 +412,7 @@ class EventFlowService
         if (! empty($missingFields)) {
             return [
                 'valid' => false,
-                'message' => 'Missing required fields: ' . implode(', ', $missingFields),
+                'message' => 'Missing required fields: '.implode(', ', $missingFields),
             ];
         }
 
@@ -459,8 +534,8 @@ class EventFlowService
     /**
      * Recolecta nodos y aristas del flujo de eventos.
      *
-     * @param array<int, array<string, mixed>> $nodes
-     * @param array<int, array<string, int|null>> $edges
+     * @param  array<int, array<string, mixed>>  $nodes
+     * @param  array<int, array<string, int|null>>  $edges
      */
     private function collectFlow(Event $event, ?int $parentId, int $depth, array &$nodes, array &$edges, array &$visited): void
     {

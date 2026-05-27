@@ -33,8 +33,8 @@ class PlatformConnectionTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->postJson('/api/platforms/' . $platform->id . '/test-connection', [], [
-            'Authorization' => 'Basic ' . base64_encode('api-user@example.com:password'),
+        $response = $this->postJson('/api/platforms/'.$platform->id.'/test-connection', [], [
+            'Authorization' => 'Basic '.base64_encode('api-user@example.com:password'),
         ]);
 
         $response->assertStatus(200);
@@ -71,8 +71,8 @@ class PlatformConnectionTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->postJson('/api/platforms/' . $platform->id . '/test-connection', [], [
-            'Authorization' => 'Basic ' . base64_encode('api-user2@example.com:password'),
+        $response = $this->postJson('/api/platforms/'.$platform->id.'/test-connection', [], [
+            'Authorization' => 'Basic '.base64_encode('api-user2@example.com:password'),
         ]);
 
         $response->assertStatus(200);
@@ -105,8 +105,8 @@ class PlatformConnectionTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->postJson('/api/platforms/' . $platform->id . '/test-connection', [], [
-            'Authorization' => 'Basic ' . base64_encode('api-user3@example.com:password'),
+        $response = $this->postJson('/api/platforms/'.$platform->id.'/test-connection', [], [
+            'Authorization' => 'Basic '.base64_encode('api-user3@example.com:password'),
         ]);
 
         $response->assertStatus(200);
@@ -114,6 +114,59 @@ class PlatformConnectionTest extends TestCase
             'success' => false,
             'data' => [
                 'configured' => false,
+            ],
+        ]);
+    }
+
+    public function test_odoo_connection_uses_platform_credentials_and_settings(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        config()->set('odoo.url', null);
+        config()->set('odoo.database', null);
+        config()->set('odoo.username', null);
+        config()->set('odoo.password', null);
+
+        Http::fake([
+            'https://odoo-directo.test/jsonrpc' => Http::response([
+                'result' => 42,
+            ], 200),
+        ]);
+
+        $user = User::factory()->create([
+            'email' => 'api-user-odoo-platform@example.com',
+            'password' => bcrypt('password'),
+        ]);
+        $this->grantPermission($user, 'platforms.manage');
+
+        $platform = Platform::query()->create([
+            'name' => 'Odoo directoGroup',
+            'slug' => 'odoo-directogroup',
+            'type' => 'odoo',
+            'active' => true,
+            'credentials' => [
+                'database' => 'directo_odoo',
+                'username' => 'odoo_user',
+                'password' => 'odoo_pass',
+            ],
+            'settings' => [
+                'url' => 'https://odoo-directo.test',
+                'odoo' => [
+                    'adapter' => 'json_rpc',
+                ],
+            ],
+        ]);
+
+        $response = $this->postJson('/api/platforms/'.$platform->id.'/test-connection', [], [
+            'Authorization' => 'Basic '.base64_encode('api-user-odoo-platform@example.com:password'),
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => true,
+            'data' => [
+                'configured' => true,
+                'uid' => 42,
+                'adapter' => 'json_rpc',
             ],
         ]);
     }
@@ -140,8 +193,8 @@ class PlatformConnectionTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->postJson('/api/platforms/' . $platform->id . '/test-connection', [], [
-            'Authorization' => 'Basic ' . base64_encode('api-user4@example.com:password'),
+        $response = $this->postJson('/api/platforms/'.$platform->id.'/test-connection', [], [
+            'Authorization' => 'Basic '.base64_encode('api-user4@example.com:password'),
         ]);
 
         $response->assertStatus(200);
@@ -156,8 +209,8 @@ class PlatformConnectionTest extends TestCase
     private function grantPermission(User $user, string $permissionSlug): void
     {
         $role = Role::query()->create([
-            'name' => 'API Role ' . $permissionSlug,
-            'slug' => 'api-role-' . str_replace('.', '-', $permissionSlug) . '-' . $user->id,
+            'name' => 'API Role '.$permissionSlug,
+            'slug' => 'api-role-'.str_replace('.', '-', $permissionSlug).'-'.$user->id,
             'description' => 'Temporary API role for tests',
         ]);
 

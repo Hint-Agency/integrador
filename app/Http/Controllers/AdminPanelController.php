@@ -8,23 +8,24 @@ use App\Models\Config;
 use App\Models\Event;
 use App\Models\Permission;
 use App\Models\Platform;
+use App\Models\Property;
 use App\Models\PropertyRelationship;
+use App\Models\Record;
 use App\Models\Role;
 use App\Models\User;
-use App\Models\Property;
-use App\Models\Record;
-use Illuminate\Http\Request;
+use App\Services\EventMappingContextResolver;
 use App\Services\EventProcessingService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use ReflectionClass;
 use ReflectionMethod;
-use Illuminate\Support\Str;
 
 class AdminPanelController extends Controller
 {
     public function __construct(
-        protected EventProcessingService $eventProcessingService
-    ) {
-    }
+        protected EventProcessingService $eventProcessingService,
+        protected EventMappingContextResolver $eventMappingContextResolver
+    ) {}
 
     public function users()
     {
@@ -296,19 +297,22 @@ class AdminPanelController extends Controller
             'platform:id,name,slug,type',
             'to_event:id,name,platform_id',
             'to_event.platform:id,name,slug,type',
+            'from_events:id,name,platform_id,to_event_id',
+            'from_events.platform:id,name,slug,type',
             'propertyRelationships.property:id,platform_id,name,key,type,required,active',
             'propertyRelationships.relatedProperty:id,platform_id,name,key,type,required,active',
         ]);
 
+        $mappingContext = $this->eventMappingContextResolver->resolve($event);
+
         $sourceProperties = Property::query()
-            ->where('platform_id', $event->platform_id)
+            ->whereIn('platform_id', $mappingContext['source_platform_ids'] ?: [$event->platform_id])
             ->where('active', true)
             ->orderBy('name')
             ->get(['id', 'platform_id', 'name', 'key', 'type', 'required']);
 
-        $targetPlatformId = $event->to_event?->platform_id ?? $event->platform_id;
         $targetProperties = Property::query()
-            ->where('platform_id', $targetPlatformId)
+            ->where('platform_id', $mappingContext['target_platform_id'] ?? $event->platform_id)
             ->where('active', true)
             ->orderBy('name')
             ->get(['id', 'platform_id', 'name', 'key', 'type', 'required']);
@@ -335,7 +339,18 @@ class AdminPanelController extends Controller
                         'type' => $event->to_event->platform->type,
                     ] : null,
                 ] : null,
+                'from_events' => $event->from_events->map(static fn (Event $fromEvent): array => [
+                    'id' => $fromEvent->id,
+                    'name' => $fromEvent->name,
+                    'platform' => $fromEvent->platform ? [
+                        'id' => $fromEvent->platform->id,
+                        'name' => $fromEvent->platform->name,
+                        'slug' => $fromEvent->platform->slug,
+                        'type' => $fromEvent->platform->type,
+                    ] : null,
+                ])->values(),
             ],
+            'mapping_context' => $mappingContext,
             'source_properties' => $sourceProperties,
             'target_properties' => $targetProperties,
             'relationships' => $event->propertyRelationships->map(static function (PropertyRelationship $relationship): array {
@@ -445,7 +460,7 @@ class AdminPanelController extends Controller
         }
 
         if ($filters['search'] !== '') {
-            $search = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $filters['search']) . '%';
+            $search = '%'.str_replace(['%', '_'], ['\\%', '\\_'], $filters['search']).'%';
 
             $query->where(static function ($query) use ($search): void {
                 $query->where('name', 'like', $search)

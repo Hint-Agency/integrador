@@ -6,20 +6,21 @@ use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class SuperAdminSeeder extends Seeder
 {
     public function run(): void
     {
-        $superAdmin = User::query()->updateOrCreate(
-            ['email' => 'carlos91rubio@gmail.com'],
+        $superAdmin = User::query()->firstOrCreate(
+            ['email' => env('SUPERADMIN_EMAIL', 'carlos91rubio@gmail.com')],
             [
-                'username' => 'charly91rubio',
-                'first_name' => 'Carlos',
-                'last_name' => 'Rubio',
-                'name' => 'Carlos Rubio',
-                'password' => Hash::make('ch_rubio2026'),
-            ]
+                'username' => env('SUPERADMIN_USERNAME', 'superadmin'),
+                'first_name' => env('SUPERADMIN_FIRST_NAME', 'Super'),
+                'last_name' => env('SUPERADMIN_LAST_NAME', 'Admin'),
+                'name' => env('SUPERADMIN_NAME', 'Super Admin'),
+                'password' => Hash::make(env('SUPERADMIN_PASSWORD', Str::random(40))),
+            ],
         );
 
         $role = Role::query()->firstOrCreate(

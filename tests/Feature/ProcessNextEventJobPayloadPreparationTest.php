@@ -101,6 +101,206 @@ class ProcessNextEventJobPayloadPreparationTest extends TestCase
         $this->assertSame($nextEvent->id, data_get($record->details, 'next_event.id'));
     }
 
+    public function test_it_maps_catalog_value_to_key_before_dispatching_next_event(): void
+    {
+        $odoo = Platform::query()->create([
+            'name' => 'Odoo',
+            'slug' => 'odoo-products',
+            'type' => 'odoo',
+            'active' => true,
+            'settings' => [
+                'odoo' => [
+                    'catalogs' => [
+                        'uom' => [
+                            'Día(s)' => 6,
+                            'Hora(s)' => 5,
+                            'Unidad de servicio' => 20,
+                            'Unidad(es)' => 1,
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+        $hubspot = Platform::query()->create([
+            'name' => 'HubSpot',
+            'slug' => 'hubspot-products',
+            'type' => 'hubspot',
+            'active' => true,
+        ]);
+
+        $nextEvent = Event::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Update Product',
+            'event_type_id' => 'product.updated',
+            'type' => 'node',
+            'active' => true,
+        ]);
+        $sourceEvent = Event::query()->create([
+            'platform_id' => $odoo->id,
+            'to_event_id' => $nextEvent->id,
+            'name' => 'Sync Source Products',
+            'event_type_id' => 'product.updated',
+            'type' => 'schedule',
+            'active' => true,
+        ]);
+
+        $sourceProperty = Property::query()->create([
+            'platform_id' => $odoo->id,
+            'name' => 'UOM ID',
+            'key' => 'uom_id.0',
+            'type' => 'integer',
+            'active' => true,
+        ]);
+        $targetProperty = Property::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Unidad de medida',
+            'key' => 'unidad_de_medida',
+            'type' => 'string',
+            'active' => true,
+        ]);
+
+        PropertyRelationship::query()->create([
+            'event_id' => $sourceEvent->id,
+            'property_id' => $sourceProperty->id,
+            'related_property_id' => $targetProperty->id,
+            'mapping_key' => 'uom_id.0',
+            'active' => true,
+            'meta' => [
+                'catalog' => [
+                    'platform' => 'source',
+                    'path' => 'odoo.catalogs.uom',
+                    'match' => 'value',
+                    'output' => 'key',
+                ],
+            ],
+        ]);
+
+        $record = Record::query()->create([
+            'event_id' => $sourceEvent->id,
+            'event_type' => 'product.updated',
+            'status' => 'init',
+            'payload' => [],
+            'message' => 'init',
+        ]);
+
+        $eventProcessing = Mockery::mock(EventProcessingService::class);
+        $eventProcessing->shouldReceive('dispatchEvent')
+            ->once()
+            ->withArgs(fn (Event $event, Record $jobRecord, array $payload): bool => $event->id === $nextEvent->id
+                && $jobRecord->id === $record->id
+                && ($payload['unidad_de_medida'] ?? null) === 'Unidad de servicio');
+
+        $hubspotApi = Mockery::mock(HubspotApiServiceRefactored::class);
+        $hubspotApi->shouldNotReceive('getObject');
+
+        $job = new ProcessNextEventJob($sourceEvent, $record, [
+            'uom_id' => [20, 'Unidad de Servicio'],
+        ]);
+        $job->handle($eventProcessing, app(EventFlowService::class), $hubspotApi);
+
+        $record->refresh();
+        $this->assertSame('Unidad de servicio', data_get($record->details, 'output_payload.unidad_de_medida'));
+    }
+
+    public function test_it_omits_catalog_mapping_when_value_is_unknown(): void
+    {
+        $odoo = Platform::query()->create([
+            'name' => 'Odoo',
+            'slug' => 'odoo-products-unknown-uom',
+            'type' => 'odoo',
+            'active' => true,
+            'settings' => [
+                'odoo' => [
+                    'catalogs' => [
+                        'uom' => [
+                            'Unidad de servicio' => 20,
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+        $hubspot = Platform::query()->create([
+            'name' => 'HubSpot',
+            'slug' => 'hubspot-products-unknown-uom',
+            'type' => 'hubspot',
+            'active' => true,
+        ]);
+
+        $nextEvent = Event::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Update Product',
+            'event_type_id' => 'product.updated',
+            'type' => 'node',
+            'active' => true,
+        ]);
+        $sourceEvent = Event::query()->create([
+            'platform_id' => $odoo->id,
+            'to_event_id' => $nextEvent->id,
+            'name' => 'Sync Source Products',
+            'event_type_id' => 'product.updated',
+            'type' => 'schedule',
+            'active' => true,
+        ]);
+
+        $sourceProperty = Property::query()->create([
+            'platform_id' => $odoo->id,
+            'name' => 'UOM ID',
+            'key' => 'uom_id.0',
+            'type' => 'integer',
+            'active' => true,
+        ]);
+        $targetProperty = Property::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Unidad de medida',
+            'key' => 'unidad_de_medida',
+            'type' => 'string',
+            'active' => true,
+        ]);
+
+        PropertyRelationship::query()->create([
+            'event_id' => $sourceEvent->id,
+            'property_id' => $sourceProperty->id,
+            'related_property_id' => $targetProperty->id,
+            'mapping_key' => 'uom_id.0',
+            'active' => true,
+            'meta' => [
+                'catalog' => [
+                    'platform' => 'source',
+                    'path' => 'odoo.catalogs.uom',
+                    'match' => 'value',
+                    'output' => 'key',
+                ],
+            ],
+        ]);
+
+        $record = Record::query()->create([
+            'event_id' => $sourceEvent->id,
+            'event_type' => 'product.updated',
+            'status' => 'init',
+            'payload' => [],
+            'message' => 'init',
+        ]);
+
+        $eventProcessing = Mockery::mock(EventProcessingService::class);
+        $eventProcessing->shouldReceive('dispatchEvent')
+            ->once()
+            ->withArgs(fn (Event $event, Record $jobRecord, array $payload): bool => $event->id === $nextEvent->id
+                && $jobRecord->id === $record->id
+                && ! array_key_exists('unidad_de_medida', $payload));
+
+        $hubspotApi = Mockery::mock(HubspotApiServiceRefactored::class);
+        $hubspotApi->shouldNotReceive('getObject');
+
+        $job = new ProcessNextEventJob($sourceEvent, $record, [
+            'uom_id' => [999, 'Desconocida'],
+            'unidad_de_medida' => 'Desconocida',
+        ]);
+        $job->handle($eventProcessing, app(EventFlowService::class), $hubspotApi);
+
+        $record->refresh();
+        $this->assertNull(data_get($record->details, 'output_payload.unidad_de_medida'));
+    }
+
     public function test_it_enriches_hubspot_property_change_payload_before_mapping(): void
     {
         $hubspotPlatform = Platform::query()->create([

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Platform;
 use Illuminate\Http\Request;
+use Spatie\WebhookClient\Exceptions\InvalidWebhookSignature;
 use Spatie\WebhookClient\WebhookConfig;
 use Symfony\Component\HttpFoundation\Response;
 use App\WebhookClient\WebhookProcessor;
@@ -41,7 +42,14 @@ class WebhookController extends Controller
         ]);
 
         $processor = new WebhookProcessor($request, $config);
-        $processor->process();
+        try {
+            $processor->process();
+        } catch (InvalidWebhookSignature) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Webhook not received, invalid signature.',
+            ], 401);
+        }
 
         return response()->json([
             'status' => 'success',

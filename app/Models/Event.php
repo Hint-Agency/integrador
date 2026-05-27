@@ -124,6 +124,42 @@ class Event extends Model
             }
         }
 
+        if (($this->platform?->type ?? null) === 'odoo') {
+            $subscriptionType = strtolower(trim((string) ($this->subscription_type ?: $this->event_type_id ?: $this->name ?: '')));
+
+            $mappedMethod = match ($subscriptionType) {
+                'odoo.partner.created.company',
+                'odoo.partner.created',
+                'company.created' => 'resPartnerCreateCompany',
+                'odoo.partner.updated.company',
+                'odoo.partner.updated',
+                'account.partner',
+                'res.partner',
+                'company.updated' => 'resPartnerUpdate',
+                'odoo.sync.create.products',
+                'odoo.product.created',
+                'product.created' => 'syncCreateProducts',
+                'odoo.sync.update.products',
+                'odoo.product.updated',
+                'product.updated' => 'syncUpdateProducts',
+                'odoo.create.sale.order',
+                'sale_order.created' => 'createSaleOrder',
+                'odoo.create.sale.subscription',
+                'invoice.recurring.created',
+                'quotes.sending_data' => 'createSaleSubscription',
+                'account.move',
+                'invoice.created',
+                'object.updated' => 'accountMoveCreatedUpdated',
+                'odoo.sale_order.canceled' => 'saleOrderCanceled',
+                'odoo.sale_subscription.canceled' => 'saleSubscriptionCanceled',
+                default => null,
+            };
+
+            if ($mappedMethod) {
+                return $mappedMethod;
+            }
+        }
+
         return null;
     }
 
@@ -144,6 +180,41 @@ class Event extends Model
 
     public function getEventClass(): ?string
     {
-        return $this->getEventTypeEnum()?->eventClass();
+        $eventClass = $this->getEventTypeEnum()?->eventClass();
+        if ($eventClass) {
+            return $eventClass;
+        }
+
+        if (($this->platform?->type ?? null) !== 'odoo') {
+            return null;
+        }
+
+        $eventType = strtolower(trim((string) ($this->subscription_type ?: $this->event_type_id ?: $this->name ?: '')));
+
+        return match ($eventType) {
+            'odoo.partner.created.company',
+            'odoo.partner.created',
+            'company.created' => \App\Events\Company\CreateCompanyEvent::class,
+            'odoo.partner.updated.company',
+            'odoo.partner.updated',
+            'account.partner',
+            'res.partner',
+            'company.updated' => \App\Events\Company\UpdateCompanyEvent::class,
+            'odoo.sync.create.products',
+            'odoo.product.created',
+            'product.created' => \App\Events\Product\CreateProductEvent::class,
+            'odoo.sync.update.products',
+            'odoo.product.updated',
+            'product.updated' => \App\Events\Product\UpdateProductEvent::class,
+            'odoo.create.sale.order',
+            'sale_order.created' => \App\Events\SaleOrder\CreateSaleOrderEvent::class,
+            'odoo.create.sale.subscription',
+            'invoice.recurring.created',
+            'quotes.sending_data' => \App\Events\Invoice\CreateRecurringInvoiceEvent::class,
+            'account.move',
+            'invoice.created' => \App\Events\Invoice\CreateInvoiceEvent::class,
+            'object.updated' => \App\Events\Object\UpdateObjectEvent::class,
+            default => null,
+        };
     }
 }

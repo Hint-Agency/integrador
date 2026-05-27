@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Permission;
+use App\Models\Platform;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Console\Command;
@@ -56,15 +57,18 @@ class SystemPreflightCommand extends Command
 
         if ($failed > 0) {
             $this->error("Preflight failed: {$failed} check(s) with FAIL status.");
+
             return Command::FAILURE;
         }
 
         if ($this->option('strict') && $warnings > 0) {
             $this->error("Preflight strict mode failed: {$warnings} warning(s) detected.");
+
             return Command::FAILURE;
         }
 
         $this->info('Preflight completed successfully.');
+
         return Command::SUCCESS;
     }
 
@@ -73,9 +77,11 @@ class SystemPreflightCommand extends Command
         try {
             DB::connection()->getPdo();
             $this->passResult('Database connection', 'Connection established.');
+
             return true;
         } catch (\Throwable $exception) {
             $this->failResult('Database connection', $exception->getMessage());
+
             return false;
         }
     }
@@ -104,10 +110,11 @@ class SystemPreflightCommand extends Command
 
         if (empty($missing)) {
             $this->passResult('Required tables', 'All required tables exist.');
+
             return;
         }
 
-        $this->failResult('Required tables', 'Missing: ' . implode(', ', $missing));
+        $this->failResult('Required tables', 'Missing: '.implode(', ', $missing));
     }
 
     private function checkQueueDriver(): void
@@ -115,6 +122,7 @@ class SystemPreflightCommand extends Command
         $queueDriver = (string) config('queue.default', 'sync');
         if ($queueDriver === 'sync') {
             $this->warnResult('Queue driver', 'Current driver is sync; use async driver in production.');
+
             return;
         }
 
@@ -139,10 +147,11 @@ class SystemPreflightCommand extends Command
         $missing = array_values(array_diff($expected, $available));
         if (empty($missing)) {
             $this->passResult('Core artisan commands', 'All required commands are registered.');
+
             return;
         }
 
-        $this->failResult('Core artisan commands', 'Missing: ' . implode(', ', $missing));
+        $this->failResult('Core artisan commands', 'Missing: '.implode(', ', $missing));
     }
 
     private function checkWritablePaths(): void
@@ -161,6 +170,7 @@ class SystemPreflightCommand extends Command
 
         if (empty($issues)) {
             $this->passResult('Writable paths', 'storage and bootstrap/cache are writable.');
+
             return;
         }
 
@@ -170,16 +180,12 @@ class SystemPreflightCommand extends Command
     private function checkRequiredEnvironment(): void
     {
         $defaultConnection = (string) config('database.default');
-        $defaultDbConfig = config('database.connections.' . $defaultConnection, []);
+        $defaultDbConfig = config('database.connections.'.$defaultConnection, []);
 
         $checks = [
             'DB_CONNECTION' => $defaultConnection,
             'DB_DATABASE' => $defaultDbConfig['database'] ?? null,
             'HUBSPOT_ACCESS_TOKEN' => config('hubspot.access_token'),
-            'ODOO_URL' => config('odoo.url'),
-            'ODOO_DATABASE' => config('odoo.database'),
-            'ODOO_USERNAME' => config('odoo.username'),
-            'ODOO_PASSWORD' => config('odoo.password'),
             'NETSUITE_ACCOUNT' => config('netsuite.account'),
             'NETSUITE_CONSUMER_KEY' => config('netsuite.consumer_key'),
             'NETSUITE_CONSUMER_SECRET' => config('netsuite.consumer_secret'),
@@ -200,6 +206,7 @@ class SystemPreflightCommand extends Command
         foreach ($checks as $key => $value) {
             if ($value === null) {
                 $missing[] = $key;
+
                 continue;
             }
 
@@ -209,11 +216,32 @@ class SystemPreflightCommand extends Command
         }
 
         if (empty($missing)) {
-            $this->passResult('Required environment variables', 'All required values are configured.');
+            $details = 'All required values are configured.';
+            if ($this->hasPlatformConfiguredOdoo()) {
+                $details .= ' Odoo may be configured from platforms.credentials/settings.';
+            }
+
+            $this->passResult('Required environment/config values', $details);
+
             return;
         }
 
-        $this->failResult('Required environment variables', 'Missing: ' . implode(', ', $missing));
+        $this->failResult('Required environment/config values', 'Missing: '.implode(', ', $missing));
+    }
+
+    private function hasPlatformConfiguredOdoo(): bool
+    {
+        if (! Schema::hasTable('platforms')) {
+            return false;
+        }
+
+        return Platform::query()
+            ->where('type', 'odoo')
+            ->where(function ($query): void {
+                $query->whereNotNull('credentials')
+                    ->orWhereNotNull('settings');
+            })
+            ->exists();
     }
 
     private function checkBaselineAccessData(): void
@@ -226,7 +254,8 @@ class SystemPreflightCommand extends Command
 
         $missingRoles = array_values(array_diff($requiredRoles, $foundRoles));
         if (! empty($missingRoles)) {
-            $this->failResult('Baseline roles', 'Missing roles: ' . implode(', ', $missingRoles));
+            $this->failResult('Baseline roles', 'Missing roles: '.implode(', ', $missingRoles));
+
             return;
         }
 
@@ -252,20 +281,24 @@ class SystemPreflightCommand extends Command
 
         $missingPermissions = array_values(array_diff($requiredPermissions, $foundPermissions));
         if (! empty($missingPermissions)) {
-            $this->failResult('Baseline permissions', 'Missing permissions: ' . implode(', ', $missingPermissions));
+            $this->failResult('Baseline permissions', 'Missing permissions: '.implode(', ', $missingPermissions));
+
             return;
         }
 
         $this->passResult('Baseline permissions', 'Core admin permissions are present.');
 
-        $superAdmin = User::query()->where('email', 'carlos91rubio@gmail.com')->first();
+        $superAdminEmail = env('SUPERADMIN_EMAIL', 'carlos91rubio@gmail.com');
+        $superAdmin = User::query()->where('email', $superAdminEmail)->first();
         if (! $superAdmin) {
-            $this->failResult('Bootstrap superadmin', 'User carlos91rubio@gmail.com not found.');
+            $this->failResult('Bootstrap superadmin', 'User '.$superAdminEmail.' not found.');
+
             return;
         }
 
         if (! $superAdmin->hasRole('superadmin')) {
             $this->failResult('Bootstrap superadmin', 'User exists but does not have superadmin role.');
+
             return;
         }
 

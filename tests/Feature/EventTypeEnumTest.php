@@ -132,4 +132,91 @@ class EventTypeEnumTest extends TestCase
 
         $this->assertSame('contactPropertyChange', $event->getMethodName());
     }
+
+    public function test_event_model_resolves_legacy_odoo_partner_event_to_v2_company_job_surface(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'Odoo directoGroup',
+            'slug' => 'odoo-directogroup',
+            'type' => 'odoo',
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Odoo Partner Created Company',
+            'event_type_id' => 'odoo.partner.created.company',
+            'type' => 'webhook',
+            'method_name' => null,
+            'active' => true,
+        ]);
+
+        $this->assertSame('resPartnerCreateCompany', $event->getMethodName());
+        $this->assertSame(\App\Events\Company\CreateCompanyEvent::class, $event->getEventClass());
+    }
+
+    public function test_event_model_resolves_legacy_odoo_product_sync_events(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'Odoo directoGroup',
+            'slug' => 'odoo-products',
+            'type' => 'odoo',
+            'active' => true,
+        ]);
+
+        $createEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Odoo Sync Create Products',
+            'event_type_id' => 'odoo.sync.create.products',
+            'type' => 'schedule',
+            'method_name' => null,
+            'active' => true,
+        ]);
+        $updateEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Odoo Sync Update Products',
+            'event_type_id' => 'odoo.sync.update.products',
+            'type' => 'schedule',
+            'method_name' => null,
+            'active' => true,
+        ]);
+
+        $this->assertSame('syncCreateProducts', $createEvent->getMethodName());
+        $this->assertSame(\App\Events\Product\CreateProductEvent::class, $createEvent->getEventClass());
+        $this->assertSame('syncUpdateProducts', $updateEvent->getMethodName());
+        $this->assertSame(\App\Events\Product\UpdateProductEvent::class, $updateEvent->getEventClass());
+    }
+
+    public function test_event_model_resolves_legacy_odoo_invoice_and_subscription_events(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'Odoo directoGroup',
+            'slug' => 'odoo-invoices',
+            'type' => 'odoo',
+            'active' => true,
+        ]);
+
+        $subscriptionEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Odoo Create Sale Subscription',
+            'event_type_id' => 'odoo.create.sale.subscription',
+            'type' => 'webhook',
+            'method_name' => null,
+            'active' => true,
+        ]);
+        $invoiceEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Odoo Account Move',
+            'event_type_id' => 'invoice.created',
+            'subscription_type' => 'account.move',
+            'type' => 'webhook',
+            'method_name' => null,
+            'active' => true,
+        ]);
+
+        $this->assertSame('createSaleSubscription', $subscriptionEvent->getMethodName());
+        $this->assertSame(\App\Events\Invoice\CreateRecurringInvoiceEvent::class, $subscriptionEvent->getEventClass());
+        $this->assertSame('accountMoveCreatedUpdated', $invoiceEvent->getMethodName());
+        $this->assertSame(\App\Events\Invoice\CreateInvoiceEvent::class, $invoiceEvent->getEventClass());
+    }
 }

@@ -47,7 +47,7 @@ class WebhookCustomProcessJob extends SpatieProcessWebhookJob
                 continue;
             }
 
-            $subscriptionType = $payload['subscriptionType'] ?? $payload['subscription_type'] ?? null;
+            $subscriptionType = $payload['subscriptionType'] ?? $payload['subscription_type'] ?? $payload['_model'] ?? null;
             if (! $subscriptionType) {
                 $eventLoggingService->createEventRecord(
                     'webhook_error',

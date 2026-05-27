@@ -6,11 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\Event;
 use App\Models\Property;
 use App\Models\PropertyRelationship;
+use App\Services\EventMappingContextResolver;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
 class PropertyRelationshipManagementController extends Controller
 {
+    public function __construct(
+        protected EventMappingContextResolver $eventMappingContextResolver
+    ) {}
+
     public function store(Request $request, Event $event): RedirectResponse
     {
         $data = $this->validatePayload($request);
@@ -76,14 +81,16 @@ class PropertyRelationshipManagementController extends Controller
     {
         $source = Property::query()->findOrFail($sourcePropertyId);
         $target = Property::query()->findOrFail($targetPropertyId);
-        $targetPlatformId = $event->to_event?->platform_id ?? $event->platform_id;
+        $mappingContext = $this->eventMappingContextResolver->resolve($event);
+        $sourcePlatformIds = $mappingContext['source_platform_ids'] ?: [$event->platform_id];
+        $targetPlatformId = $mappingContext['target_platform_id'] ?? $event->platform_id;
 
-        if ($source->platform_id !== $event->platform_id) {
-            abort(422, 'La propiedad origen no pertenece a la plataforma del evento.');
+        if (! in_array((int) $source->platform_id, array_map('intval', $sourcePlatformIds), true)) {
+            abort(422, 'La propiedad origen no pertenece al contexto de entrada del mapping.');
         }
 
         if ($target->platform_id !== $targetPlatformId) {
-            abort(422, 'La propiedad destino no pertenece a la plataforma objetivo del evento.');
+            abort(422, 'La propiedad destino no pertenece al contexto objetivo del mapping.');
         }
     }
 }

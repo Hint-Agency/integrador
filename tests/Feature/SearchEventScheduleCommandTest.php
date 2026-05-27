@@ -48,6 +48,7 @@ class SearchEventScheduleCommandTest extends TestCase
             return $job->event->id === $event->id;
         });
 
+        $this->assertNotNull($event->refresh()->last_executed_at);
     }
 
     public function test_search_event_schedule_skips_recently_executed_event(): void

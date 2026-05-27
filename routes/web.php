@@ -205,3 +205,4 @@ Route::middleware('auth')->group(function () {
 });
 
 Route::prefix('webhooks')->group(base_path('routes/webhooks.php'));
+Route::prefix('webhook')->group(base_path('routes/webhooks.php'));

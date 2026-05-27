@@ -39,10 +39,12 @@ class SearchEventSchedule extends Command
                     'error' => $exception->getMessage(),
                 ]);
                 $this->warn("Invalid schedule expression for event [{$event->id}] {$event->name}");
+
                 continue;
             }
 
             if ($shouldExecute) {
+                $event->update(['last_executed_at' => now()]);
                 ExecuteEventJob::dispatch($event)->onQueue('events');
                 $this->info("Scheduled event queued: {$event->name}");
             }

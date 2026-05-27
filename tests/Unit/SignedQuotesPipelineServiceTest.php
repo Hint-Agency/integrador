@@ -9,7 +9,7 @@ class SignedQuotesPipelineServiceTest extends TestCase
 {
     public function test_it_normalizes_and_evaluates_entity_actions(): void
     {
-        $service = new SignedQuotesPipelineService();
+        $service = new SignedQuotesPipelineService;
 
         $quotes = $service->normalizeQuotes([[
             'quote_id' => 'Q-1',
@@ -41,7 +41,7 @@ class SignedQuotesPipelineServiceTest extends TestCase
 
     public function test_it_builds_hubspot_sync_metadata(): void
     {
-        $service = new SignedQuotesPipelineService();
+        $service = new SignedQuotesPipelineService;
 
         $metadata = $service->buildHubspotSyncMetadata([
             'action' => 'update',
@@ -51,5 +51,20 @@ class SignedQuotesPipelineServiceTest extends TestCase
         $this->assertSame('update', $metadata['sync_operation_odoo']);
         $this->assertSame(['name', 'email'], $metadata['updated_fields_odoo']);
         $this->assertArrayHasKey('last_sync_odoo', $metadata);
+    }
+
+    public function test_it_builds_canonical_quote_sync_marker_properties(): void
+    {
+        $service = new SignedQuotesPipelineService;
+
+        $properties = $service->buildHubspotQuoteSyncProperties([], 'odoo', [
+            'odoo_id' => 901,
+            'sync_status' => 'already_exists',
+        ]);
+
+        $this->assertSame(901, $properties['odoo_id']);
+        $this->assertSame('already_exists', $properties['sync_status_odoo']);
+        $this->assertSame('', $properties['last_error_odoo']);
+        $this->assertArrayHasKey('last_sync_odoo', $properties);
     }
 }

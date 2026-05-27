@@ -58,4 +58,50 @@ class HubspotFilePropertyServiceTest extends TestCase
         $this->assertSame('application/pdf', $result['_file_attachments']['document_url']['mime_type']);
         $this->assertNotEmpty($result['_file_attachments']['document_url']['content_base64']);
     }
+
+    public function test_it_normalizes_file_url_for_odoo_binary_fields(): void
+    {
+        Http::fake([
+            'https://files.example.com/*' => Http::response('file-content', 200, [
+                'Content-Type' => 'application/pdf',
+            ]),
+        ]);
+
+        $service = app(HubspotFilePropertyService::class);
+        $result = $service->normalizeFileValueForOdoo(
+            'https://files.example.com/constancia.pdf',
+            'constancia.pdf'
+        );
+
+        $this->assertSame('constancia.pdf', $result['name']);
+        $this->assertSame(base64_encode('file-content'), $result['base64']);
+        $this->assertSame('application/pdf', $result['mime_type']);
+    }
+
+    public function test_it_resolves_hubspot_file_id_to_signed_url_for_odoo_binary_fields(): void
+    {
+        config([
+            'hubspot.access_token' => 'token_123',
+            'hubspot.base_url' => 'https://api.hubapi.test',
+        ]);
+
+        Http::fake([
+            'https://api.hubapi.test/files/v3/files/268543396066/signed-url' => Http::response([
+                'name' => 'constancia fiscal',
+                'extension' => 'pdf',
+                'url' => 'https://signed-files.example.com/constancia',
+            ], 200),
+            'https://signed-files.example.com/constancia' => Http::response('file-content', 200, [
+                'Content-Type' => 'application/pdf',
+            ]),
+        ]);
+
+        $service = app(HubspotFilePropertyService::class);
+        $result = $service->normalizeFileValueForOdoo('268543396066', 'constancia.pdf');
+
+        $this->assertSame('constancia fiscal.pdf', $result['name']);
+        $this->assertSame(base64_encode('file-content'), $result['base64']);
+        $this->assertSame('application/pdf', $result['mime_type']);
+        $this->assertSame('268543396066', $result['hubspot_file_id']);
+    }
 }

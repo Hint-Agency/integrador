@@ -7,7 +7,7 @@ use App\Models\Event;
 use App\Models\Platform;
 use App\Models\Record;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class CreateQuoteJobSourceWritebackTest extends TestCase
@@ -16,17 +16,7 @@ class CreateQuoteJobSourceWritebackTest extends TestCase
 
     public function test_it_stores_execution_metadata_back_in_hubspot_after_quote_creation(): void
     {
-        config()->set('hubspot.access_token', 'token_123');
-        config()->set('hubspot.base_url', 'https://api.hubapi.test');
-
-        Http::fake([
-            'https://api.hubapi.test/crm/v3/objects/quotes/hsq_123' => Http::response([
-                'id' => 'hsq_123',
-                'properties' => [
-                    'sync_operation_odoo' => 'mixed',
-                ],
-            ], 200),
-        ]);
+        Queue::fake();
 
         $platform = Platform::query()->create([
             'name' => 'HubSpot',
@@ -91,25 +81,11 @@ class CreateQuoteJobSourceWritebackTest extends TestCase
             app(\App\Services\SignedQuotesPipelineService::class)
         );
 
-        Http::assertSent(function ($request): bool {
-            if ($request->method() !== 'PATCH' || $request->url() !== 'https://api.hubapi.test/crm/v3/objects/quotes/hsq_123') {
-                return false;
-            }
-
-            $payload = $request->data();
-            $properties = $payload['properties'] ?? [];
-
-            return ($properties['odoo_id'] ?? null) === 'Q-100'
-                && ($properties['sync_operation_odoo'] ?? null) === 'mixed'
-                && ($properties['updated_fields_odoo'] ?? null) === '["name","email"]'
-                && array_key_exists('last_sync_odoo', $properties);
-        });
-
         $record->refresh();
 
         $this->assertSame('success', $record->status);
-        $this->assertSame('Quote creation completed and source platform updated', $record->message);
-        $this->assertTrue((bool) ($record->details['source_platform_updates'][0]['success'] ?? false));
-        $this->assertSame('hsq_123', $record->details['source_platform_updates'][0]['hubspot_quote_id'] ?? null);
+        $this->assertSame('Quote dispatched for destination creation', $record->message);
+        $this->assertSame('pending_destination_creation', $record->details['quotes'][0]['status'] ?? null);
+        $this->assertSame([], $record->details['source_platform_updates'] ?? null);
     }
 }

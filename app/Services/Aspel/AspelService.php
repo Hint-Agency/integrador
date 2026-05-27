@@ -9,8 +9,8 @@ use App\Models\Platform;
 use App\Models\Record;
 use App\Services\EventLoggingService;
 use App\Services\EventProcessingService;
-use App\Services\Generic\GenericHttpAdapter;
 use App\Services\Generic\AuthStrategyResolver;
+use App\Services\Generic\GenericHttpAdapter;
 use App\Services\Generic\GenericPlatformService;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
@@ -20,9 +20,13 @@ use Illuminate\Support\Str;
 class AspelService extends GenericPlatformService
 {
     private const DEFAULT_CHANGES_TAKE = 200;
+
     private const DEFAULT_INITIAL_LOOKBACK_HOURS = 24;
+
     private const CHANGE_IDEMPOTENCY_TTL_HOURS = 24 * 30;
+
     private const CHANGE_IDEMPOTENCY_STALE_MINUTES = 15;
+
     private const DETAIL_NOT_FOUND_RETRY_BACKOFF_SECONDS = [1, 3];
 
     /**
@@ -184,14 +188,14 @@ class AspelService extends GenericPlatformService
 
             if (! ($updateResponse['success'] ?? false)) {
                 return [
-                        'success' => false,
-                        'message' => 'ASPEL contact update failed after successful lookup.',
-                        'data' => [
-                            'lookup_response' => $lookupResponse,
-                            'update_response' => $updateResponse,
-                            'lookup_criteria' => $lookupCriteria,
-                        ],
-                    ];
+                    'success' => false,
+                    'message' => 'ASPEL contact update failed after successful lookup.',
+                    'data' => [
+                        'lookup_response' => $lookupResponse,
+                        'update_response' => $updateResponse,
+                        'lookup_criteria' => $lookupCriteria,
+                    ],
+                ];
             }
 
             $updateResponse['data'] = array_merge(
@@ -287,7 +291,6 @@ class AspelService extends GenericPlatformService
         $take = max(1, (int) ($this->event->meta['take'] ?? Arr::get($payload, 'take', self::DEFAULT_CHANGES_TAKE)));
         $cursor = $this->loadCursorState();
         $runStartedAt = now()->toISOString();
-\Log::info('Starting ASPEL contact change polling run', ['take' => $take, 'initial_cursor' => $cursor, 'payload' => $payload, 'run_started_at' => $runStartedAt]);
         $metrics = [
             'take' => $take,
             'pages_processed' => 0,
@@ -349,6 +352,7 @@ class AspelService extends GenericPlatformService
 
                     if (($changeIdempotency['skip'] ?? false) === true) {
                         $metrics['items_skipped']++;
+
                         continue;
                     }
 
@@ -367,13 +371,13 @@ class AspelService extends GenericPlatformService
                         return $this->failPollingRun(
                             'Failed to fetch ASPEL contact detail.',
                             [
-                            'changes_response' => $pageResponse,
-                            'detail_response' => $detailResponse,
-                            'failed_item' => $item,
-                            'detail_retry_attempts' => $detailResponse['retry_attempts'] ?? 0,
-                        ],
-                        $currentCursor,
-                        $metrics
+                                'changes_response' => $pageResponse,
+                                'detail_response' => $detailResponse,
+                                'failed_item' => $item,
+                                'detail_retry_attempts' => $detailResponse['retry_attempts'] ?? 0,
+                            ],
+                            $currentCursor,
+                            $metrics
                         );
                     }
 
@@ -565,6 +569,7 @@ class AspelService extends GenericPlatformService
 
                     if (($changeIdempotency['skip'] ?? false) === true) {
                         $metrics['items_skipped']++;
+
                         continue;
                     }
 
@@ -943,7 +948,7 @@ class AspelService extends GenericPlatformService
         }
 
         if (preg_match('~/contacts/?$~i', $endpoint) === 1) {
-            return rtrim($endpoint, '/') . '/' . rawurlencode($normalizedClave);
+            return rtrim($endpoint, '/').'/'.rawurlencode($normalizedClave);
         }
 
         return $endpoint;
@@ -963,7 +968,7 @@ class AspelService extends GenericPlatformService
             return str_replace('{clave}', rawurlencode($clave), $endpoint);
         }
 
-        return rtrim($endpoint, '/') . '/' . rawurlencode($clave);
+        return rtrim($endpoint, '/').'/'.rawurlencode($clave);
     }
 
     private function resolveSearchEndpoint(string $endpoint): string
@@ -986,10 +991,10 @@ class AspelService extends GenericPlatformService
         $endpoint = preg_replace('~/contacts/[^/]+/?$~i', '/contacts', $endpoint) ?: $endpoint;
 
         if (preg_match('~/contacts/?$~i', $endpoint) === 1) {
-            return rtrim($endpoint, '/') . '/search';
+            return rtrim($endpoint, '/').'/search';
         }
 
-        return rtrim($endpoint, '/') . '/search';
+        return rtrim($endpoint, '/').'/search';
     }
 
     private function resolveAspelClave(array $payload): ?string
@@ -1152,26 +1157,26 @@ class AspelService extends GenericPlatformService
 
     private function persistCursorStateForScope(string $scope, array $cursor): void
     {
-        $this->setCursorValue('since_ts', $cursor['sinceTs'] ?? null, 'ASPEL ' . $scope . ' sync cursor timestamp', $scope);
-        $this->setCursorValue('since_clave', $cursor['sinceClave'] ?? '', 'ASPEL ' . $scope . ' sync cursor clave', $scope);
+        $this->setCursorValue('since_ts', $cursor['sinceTs'] ?? null, 'ASPEL '.$scope.' sync cursor timestamp', $scope);
+        $this->setCursorValue('since_clave', $cursor['sinceClave'] ?? '', 'ASPEL '.$scope.' sync cursor clave', $scope);
     }
 
     private function persistRunStateForScope(string $scope, array $state): void
     {
         if (array_key_exists('last_run_started_at', $state)) {
-            $this->setCursorValue('last_run_started_at', $state['last_run_started_at'], 'ASPEL ' . $scope . ' sync last run start', $scope);
+            $this->setCursorValue('last_run_started_at', $state['last_run_started_at'], 'ASPEL '.$scope.' sync last run start', $scope);
         }
 
         if (array_key_exists('last_run_finished_at', $state)) {
-            $this->setCursorValue('last_run_finished_at', $state['last_run_finished_at'], 'ASPEL ' . $scope . ' sync last run finish', $scope);
+            $this->setCursorValue('last_run_finished_at', $state['last_run_finished_at'], 'ASPEL '.$scope.' sync last run finish', $scope);
         }
 
         if (array_key_exists('last_run_status', $state)) {
-            $this->setCursorValue('last_run_status', $state['last_run_status'], 'ASPEL ' . $scope . ' sync last run status', $scope);
+            $this->setCursorValue('last_run_status', $state['last_run_status'], 'ASPEL '.$scope.' sync last run status', $scope);
         }
 
         if (array_key_exists('last_error', $state)) {
-            $this->setCursorValue('last_error', $state['last_error'], 'ASPEL ' . $scope . ' sync last error', $scope);
+            $this->setCursorValue('last_error', $state['last_error'], 'ASPEL '.$scope.' sync last error', $scope);
         }
     }
 
@@ -1208,7 +1213,7 @@ class AspelService extends GenericPlatformService
 
     private function cursorConfigKey(string $suffix, string $scope = 'contacts'): string
     {
-        return 'aspel.' . $scope . '.cursor.' . $this->event->id . '.' . $suffix;
+        return 'aspel.'.$scope.'.cursor.'.$this->event->id.'.'.$suffix;
     }
 
     private function normalizeCursorValue(mixed $value): ?string
@@ -1249,12 +1254,12 @@ class AspelService extends GenericPlatformService
                     'idempotency_key' => $key,
                     'event_id' => $this->event->id,
                     'record_id' => $this->record->id,
-                    'endpoint' => 'aspel.' . $scope . '.changes',
+                    'endpoint' => 'aspel.'.$scope.'.changes',
                     'method' => 'CHANGE',
                     'status' => 'processing',
                     'expires_at' => $expiresAt,
                     'metadata' => [
-                        'source' => 'aspel_' . $scope . '_changes',
+                        'source' => 'aspel_'.$scope.'_changes',
                         'clave' => $clave,
                         'versionSinc' => $versionSinc,
                     ],
@@ -1279,12 +1284,12 @@ class AspelService extends GenericPlatformService
             $existing->update([
                 'event_id' => $this->event->id,
                 'record_id' => $this->record->id,
-                'endpoint' => 'aspel.' . $scope . '.changes',
+                'endpoint' => 'aspel.'.$scope.'.changes',
                 'method' => 'CHANGE',
                 'status' => 'processing',
                 'expires_at' => $expiresAt,
                 'metadata' => array_merge($metadata, [
-                    'source' => 'aspel_' . $scope . '_changes',
+                    'source' => 'aspel_'.$scope.'_changes',
                     'clave' => $clave,
                     'versionSinc' => $versionSinc,
                 ]),
@@ -1314,7 +1319,7 @@ class AspelService extends GenericPlatformService
 
     private function buildChangeIdempotencyKey(string $scope, string $clave, string $versionSinc): string
     {
-        return 'evt:' . $this->event->id . ':aspel-' . $scope . '-change:' . Str::lower(sha1($clave . '|' . $versionSinc));
+        return 'evt:'.$this->event->id.':aspel-'.$scope.'-change:'.Str::lower(sha1($clave.'|'.$versionSinc));
     }
 
     private function buildHubspotSyncPayload(

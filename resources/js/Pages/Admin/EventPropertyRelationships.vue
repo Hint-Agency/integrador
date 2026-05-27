@@ -9,6 +9,7 @@ const props = defineProps({
     source_properties: { type: Array, default: () => [] },
     target_properties: { type: Array, default: () => [] },
     relationships: { type: Array, default: () => [] },
+    mapping_context: { type: Object, default: () => ({}) },
 });
 
 const editingRelationshipId = ref(null);
@@ -23,7 +24,20 @@ const blankForm = () => ({
 
 const form = useForm(blankForm());
 
-const targetPlatformLabel = computed(() => props.event.to_event?.platform?.name ?? props.event.platform?.name ?? 'same platform');
+const sourcePlatformLabel = computed(() => props.mapping_context.source_label ?? props.event.platform?.name ?? 'Incoming payload');
+const targetPlatformLabel = computed(() => props.mapping_context.target_label ?? props.event.platform?.name ?? 'Mapping target');
+const nextPlatformLabel = computed(() => props.mapping_context.next_label ?? props.event.to_event?.platform?.name ?? null);
+const mappingModeLabel = computed(() => {
+    if (props.mapping_context.has_upstream && props.event.to_event) {
+        return 'Incoming payload → current event payload; next event is flow continuity.';
+    }
+
+    if (props.event.to_event) {
+        return 'Current event payload → next event payload.';
+    }
+
+    return 'Current event payload → current platform payload.';
+});
 const hasRelationships = computed(() => (props.relationships ?? []).length > 0);
 
 const parseMeta = () => {
@@ -112,19 +126,24 @@ const submit = () => {
 
         <div class="summary-cards">
             <article class="summary-card">
-                <span class="eyebrow">Source Platform</span>
-                <strong>{{ props.event.platform?.name ?? 'n/a' }}</strong>
-                <p>{{ props.source_properties.length }} active properties available</p>
+                <span class="eyebrow">Incoming Payload / Source</span>
+                <strong>{{ sourcePlatformLabel }}</strong>
+                <p>{{ props.source_properties.length }} active source properties available</p>
             </article>
             <article class="summary-card">
-                <span class="eyebrow">Target Platform</span>
+                <span class="eyebrow">Mapping Target</span>
                 <strong>{{ targetPlatformLabel }}</strong>
-                <p>{{ props.target_properties.length }} active properties available</p>
+                <p>{{ props.target_properties.length }} active target properties available</p>
+            </article>
+            <article class="summary-card">
+                <span class="eyebrow">Next Event</span>
+                <strong>{{ props.event.to_event?.name ?? 'No next event' }}</strong>
+                <p>{{ nextPlatformLabel ? `${nextPlatformLabel} · informational continuity` : 'No write-back or downstream step configured' }}</p>
             </article>
             <article class="summary-card">
                 <span class="eyebrow">Configured Mappings</span>
                 <strong>{{ props.relationships.length }}</strong>
-                <p>Each mapping feeds the event flow transformer.</p>
+                <p>{{ mappingModeLabel }}</p>
             </article>
         </div>
 
@@ -133,7 +152,7 @@ const submit = () => {
                 <header class="panel-head">
                     <div>
                         <h2>Current Mappings</h2>
-                        <p>These relationships are applied in `EventFlowService` before dispatching the next event.</p>
+                        <p>These mappings read from the incoming payload and build the payload consumed by this event.</p>
                     </div>
                 </header>
 
@@ -182,15 +201,15 @@ const submit = () => {
                 <header class="panel-head">
                     <div>
                         <h2>{{ editingRelationshipId ? 'Edit Mapping' : 'Create Mapping' }}</h2>
-                        <p>Choose source and target properties. Use `mapping_key` only if the payload path differs from the source property key.</p>
+                        <p>Choose incoming and target properties. Use `mapping_key` when the payload path differs from the source property key.</p>
                     </div>
                 </header>
 
                 <form class="editor-form" @submit.prevent="submit">
                     <label class="field">
-                        <span>Source Property</span>
+                        <span>Incoming Payload Property</span>
                         <select v-model="form.property_id" required>
-                            <option value="" disabled>Select source property</option>
+                            <option value="" disabled>Select incoming property</option>
                             <option v-for="property in props.source_properties" :key="property.id" :value="property.id">
                                 {{ property.name }} ({{ property.key }})
                             </option>
@@ -198,7 +217,7 @@ const submit = () => {
                     </label>
 
                     <label class="field">
-                        <span>Target Property</span>
+                        <span>Mapping Target Property</span>
                         <select v-model="form.related_property_id" required>
                             <option value="" disabled>Select target property</option>
                             <option v-for="property in props.target_properties" :key="property.id" :value="property.id">
@@ -209,8 +228,8 @@ const submit = () => {
 
                     <label class="field">
                         <span>Mapping Key</span>
-                        <input v-model="form.mapping_key" type="text" placeholder="payload.properties.amount">
-                        <small>Optional. If empty, the source property key is used.</small>
+                        <input v-model="form.mapping_key" type="text" placeholder="raw.associations.deals.0.owner.email">
+                        <small>Optional. If empty, the source property key is used. Supports enriched payload paths like hs_terms, raw.properties.hs_terms, raw.associations.deals.0.owner.email, or entity_results.company.target_id.</small>
                     </label>
 
                     <label class="field">

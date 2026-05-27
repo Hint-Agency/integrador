@@ -1,6 +1,6 @@
 <script setup>
 import AdminLayout from '@/Layouts/AdminLayout.vue';
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { Link, router, useForm } from '@inertiajs/vue3';
 
 const props = defineProps({
@@ -13,6 +13,9 @@ const isEdit = computed(() => props.mode === 'edit');
 const credentials = props.platform?.credentials ?? {};
 const settings = props.platform?.settings ?? {};
 const genericServiceDriver = settings.service_driver ?? credentials.service_driver ?? '';
+const settingsJsonError = ref('');
+
+const stringifyJson = (value) => JSON.stringify(value ?? {}, null, 2);
 
 const form = useForm({
     name: props.platform?.name ?? '',
@@ -51,9 +54,15 @@ const form = useForm({
     azure_sql_trust_server_certificate: settings.trust_server_certificate ?? false,
     azure_sql_login_timeout: settings.login_timeout ?? 30,
 
-    signature: props.platform?.signature ?? '',
+    signature: props.platform?.signature ?? (props.platform?.type === 'odoo' ? 'x-odoo-signature' : ''),
     secret_key: props.platform?.secret_key ?? '',
+    webhook_validation_mode: settings.webhook?.validation_mode
+        ?? settings.webhook?.validation
+        ?? settings.webhook_signature_mode
+        ?? (props.platform?.type === 'odoo' ? 'shared_token' : 'hmac_sha256'),
+    webhook_allow_token_in_query: settings.webhook?.allow_token_in_query ?? false,
     api_url: settings.base_url ?? '',
+    settings_text: stringifyJson(settings),
     active: props.platform?.active ?? true,
 });
 
@@ -116,6 +125,8 @@ const missingRequiredCount = computed(() => requiredFields.value
     }).length);
 
 const canTestConnection = computed(() => isEdit.value && !form.processing);
+const webhookSecretLabel = computed(() => form.webhook_validation_mode === 'shared_token' ? 'Shared Token' : 'Secret Key');
+const webhookSecretPlaceholder = computed(() => form.webhook_validation_mode === 'shared_token' ? 'Enter shared webhook token' : 'Enter secret key');
 
 const compactObject = (obj) => Object.fromEntries(Object.entries(obj)
     .filter(([_, value]) => {
@@ -123,6 +134,23 @@ const compactObject = (obj) => Object.fromEntries(Object.entries(obj)
         if (typeof value === 'string') return value.trim() !== '';
         return true;
     }));
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const deepMerge = (base, override) => {
+    const merged = { ...base };
+
+    Object.entries(override).forEach(([key, value]) => {
+        if (isPlainObject(value) && isPlainObject(merged[key])) {
+            merged[key] = deepMerge(merged[key], value);
+            return;
+        }
+
+        merged[key] = value;
+    });
+
+    return merged;
+};
 
 const parseBooleanString = (value) => {
     if (typeof value !== 'string') {
@@ -282,6 +310,12 @@ const buildCredentials = () => {
 const buildSettings = () => {
     const common = compactObject({
         base_url: form.api_url,
+        webhook: compactObject({
+            validation_mode: form.webhook_validation_mode,
+            allow_token_in_query: form.webhook_validation_mode === 'shared_token'
+                ? !!form.webhook_allow_token_in_query
+                : null,
+        }),
     });
 
     if (form.type === 'odoo') {
@@ -313,6 +347,32 @@ const buildSettings = () => {
     return common;
 };
 
+watch(() => form.type, (type) => {
+    if (type === 'odoo' && !form.signature) {
+        form.signature = 'x-odoo-signature';
+    }
+
+    if (type === 'odoo' && form.webhook_validation_mode === 'hmac_sha256') {
+        form.webhook_validation_mode = 'shared_token';
+    }
+});
+
+const parseAdvancedSettings = () => {
+    const raw = String(form.settings_text || '').trim();
+
+    if (!raw) {
+        return {};
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!isPlainObject(parsed)) {
+        throw new Error('Settings JSON debe ser un objeto.');
+    }
+
+    return parsed;
+};
+
 const testConnection = () => {
     if (!isEdit.value) {
         return;
@@ -323,7 +383,80 @@ const testConnection = () => {
     });
 };
 
+const generateToken = () => {
+    if (form.secret_key && !window.confirm('Ya existe un token configurado. ¿Desea reemplazarlo por uno nuevo?')) {
+        return;
+    }
+
+    const bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    form.secret_key = Array.from(bytes)
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('');
+
+    window.alert('Token generado. Guarde la plataforma para aplicar el cambio.');
+};
+
+const revokeToken = () => {
+    if (!form.secret_key) {
+        window.alert('No hay token configurado para revocar.');
+        return;
+    }
+
+    if (!window.confirm('¿Desea revocar el token actual? Los webhooks dejarán de validar hasta guardar un nuevo token.')) {
+        return;
+    }
+
+    form.secret_key = '';
+    window.alert('Token revocado. Guarde la plataforma para aplicar el cambio.');
+};
+
+const copyToken = async () => {
+    if (!form.secret_key) {
+        window.alert('No hay token para copiar.');
+        return;
+    }
+
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(form.secret_key);
+        } else {
+            throw new Error('Clipboard API unavailable.');
+        }
+
+        window.alert('Token copiado al portapapeles.');
+    } catch (error) {
+        const textarea = document.createElement('textarea');
+        textarea.value = form.secret_key;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.top = '-9999px';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+
+        try {
+            const copied = document.execCommand('copy');
+            window.alert(copied ? 'Token copiado al portapapeles.' : 'No se pudo copiar el token desde el navegador.');
+        } finally {
+            document.body.removeChild(textarea);
+        }
+    }
+};
+
 const submit = () => {
+    settingsJsonError.value = '';
+
+    let advancedSettings = {};
+
+    try {
+        advancedSettings = parseAdvancedSettings();
+    } catch (error) {
+        settingsJsonError.value = error.message || 'Settings JSON debe ser válido.';
+        return;
+    }
+
     const payload = {
         name: form.name,
         slug: form.slug || null,
@@ -332,7 +465,7 @@ const submit = () => {
         secret_key: form.secret_key || null,
         active: !!form.active,
         credentials: buildCredentials(),
-        settings: buildSettings(),
+        settings: deepMerge(advancedSettings, buildSettings()),
     };
 
     form.transform(() => payload);
@@ -571,9 +704,31 @@ const submit = () => {
                         <input v-model="form.signature" type="text" placeholder="Enter webhook signature">
                     </label>
                     <label>
-                        <span>Secret Key</span>
-                        <input v-model="form.secret_key" type="text" placeholder="Enter secret key">
+                        <span>Validation Mode</span>
+                        <select v-model="form.webhook_validation_mode">
+                            <option value="hmac_sha256">HMAC SHA-256</option>
+                            <option value="shared_token">Shared token</option>
+                        </select>
                     </label>
+                    <label>
+                        <span>{{ webhookSecretLabel }}</span>
+                        <input v-model="form.secret_key" type="password" :placeholder="webhookSecretPlaceholder">
+                    </label>
+                    <label v-if="form.webhook_validation_mode === 'shared_token'" class="check full">
+                        <input v-model="form.webhook_allow_token_in_query" type="checkbox">
+                        <span>Allow shared token in URL/body for platforms that cannot send headers</span>
+                    </label>
+                    <div class="token-actions full">
+                        <button type="button" class="secondary small" @click="generateToken">
+                            Generate token
+                        </button>
+                        <button type="button" class="secondary small" :disabled="!form.secret_key" @click="copyToken">
+                            Copy token
+                        </button>
+                        <button type="button" class="secondary danger small" :disabled="!form.secret_key" @click="revokeToken">
+                            Revoke token
+                        </button>
+                    </div>
                     <label class="full">
                         <span>API URL</span>
                         <input v-model="form.api_url" type="url" placeholder="https://api.example.com" :disabled="isAzureSqlDriver">
@@ -582,6 +737,28 @@ const submit = () => {
                         <input v-model="form.active" type="checkbox">
                         <span>Active platform</span>
                     </label>
+                </div>
+            </section>
+
+            <section class="block">
+                <header>
+                    <h2>Advanced Settings</h2>
+                    <p>Non-sensitive platform settings stored in platforms.settings</p>
+                </header>
+                <div class="grid one">
+                    <label>
+                        <span>Settings JSON</span>
+                        <textarea
+                            v-model="form.settings_text"
+                            rows="12"
+                            spellcheck="false"
+                            placeholder='{"odoo":{"catalogs":{"taxes":{}},"defaults":{"company_id":1}}}'
+                        />
+                    </label>
+                    <p v-if="settingsJsonError" class="field-error">{{ settingsJsonError }}</p>
+                    <p class="helper">
+                        Use este campo para catálogos, defaults y opciones por plataforma. No guarde secretos aquí; las credenciales van en el bloque de credenciales.
+                    </p>
                 </div>
             </section>
 
@@ -641,6 +818,12 @@ const submit = () => {
     margin:0;
     color:#64748b;
     font-size:12px;
+}
+
+.field-error{
+    margin:0;
+    color:#dc2626;
+    font-size:13px;
 }
 
 .block{
@@ -716,6 +899,13 @@ textarea::placeholder{color:#94a3b8;}
 
 .check input{width:16px;height:16px;}
 
+.token-actions{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    flex-wrap:wrap;
+}
+
 .primary,
 .secondary{
     border-radius:8px;
@@ -735,6 +925,12 @@ textarea::placeholder{color:#94a3b8;}
     border:1px solid #cbd5e1;
     background:#f8fafc;
     color:#334155;
+}
+
+.secondary.danger{
+    border-color:#fecaca;
+    color:#b91c1c;
+    background:#fff7f7;
 }
 
 button:disabled{opacity:.55;cursor:not-allowed;}

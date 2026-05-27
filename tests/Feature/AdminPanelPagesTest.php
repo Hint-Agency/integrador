@@ -5,12 +5,12 @@ namespace Tests\Feature;
 use App\Jobs\ExecuteEventJob;
 use App\Models\Config;
 use App\Models\Event;
-use App\Models\Property;
+use App\Models\EventHttpConfig;
 use App\Models\Permission;
 use App\Models\Platform;
+use App\Models\Property;
 use App\Models\Role;
 use App\Models\User;
-use App\Models\EventHttpConfig;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -102,7 +102,7 @@ class AdminPanelPagesTest extends TestCase
 
         $role = Role::query()->where('slug', 'superadmin')->firstOrFail();
 
-        $response = $this->actingAs($actor)->delete('/admin/roles/' . $role->id);
+        $response = $this->actingAs($actor)->delete('/admin/roles/'.$role->id);
 
         $response->assertRedirect();
         $this->assertDatabaseHas('roles', ['id' => $role->id, 'slug' => 'superadmin']);
@@ -120,7 +120,7 @@ class AdminPanelPagesTest extends TestCase
         ]);
         $this->grantPermission($actor, 'users.manage');
 
-        $response = $this->actingAs($actor)->put('/admin/users/' . $target->id, [
+        $response = $this->actingAs($actor)->put('/admin/users/'.$target->id, [
             'username' => 'updated.user',
             'first_name' => 'Updated',
             'last_name' => 'User',
@@ -145,7 +145,7 @@ class AdminPanelPagesTest extends TestCase
         $actor = User::factory()->create();
         $this->grantPermission($actor, 'users.manage');
 
-        $response = $this->actingAs($actor)->delete('/admin/users/' . $actor->id);
+        $response = $this->actingAs($actor)->delete('/admin/users/'.$actor->id);
 
         $response->assertRedirect();
         $this->assertDatabaseHas('users', ['id' => $actor->id]);
@@ -203,7 +203,7 @@ class AdminPanelPagesTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->actingAs($actor)->get('/admin/events/' . $event->id . '/edit');
+        $response = $this->actingAs($actor)->get('/admin/events/'.$event->id.'/edit');
 
         $response->assertStatus(200);
     }
@@ -385,7 +385,7 @@ class AdminPanelPagesTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->actingAs($actor)->post('/admin/events/' . $event->id . '/execute-now');
+        $response = $this->actingAs($actor)->post('/admin/events/'.$event->id.'/execute-now');
 
         $response->assertRedirect('/admin/events');
         $response->assertSessionHas('success');
@@ -417,6 +417,63 @@ class AdminPanelPagesTest extends TestCase
         ]);
     }
 
+    public function test_admin_platform_update_endpoint_stores_nested_settings(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'platforms.manage');
+
+        $platform = Platform::query()->create([
+            'name' => 'Odoo',
+            'slug' => 'odoo',
+            'type' => 'odoo',
+            'active' => true,
+            'credentials' => [
+                'username' => 'demo',
+                'password' => 'secret',
+                'database' => 'directogroup',
+            ],
+            'settings' => [
+                'url' => 'https://old-odoo.example.com',
+            ],
+        ]);
+
+        $response = $this->actingAs($actor)->put('/admin/platforms/'.$platform->id, [
+            'name' => 'Odoo DirectoGroup',
+            'slug' => 'odoo-directogroup',
+            'type' => 'odoo',
+            'signature' => null,
+            'secret_key' => null,
+            'active' => true,
+            'credentials' => [
+                'username' => 'demo',
+                'password' => 'secret',
+                'database' => 'directogroup',
+            ],
+            'settings' => [
+                'url' => 'https://odoo.example.com',
+                'odoo' => [
+                    'catalogs' => [
+                        'taxes' => [
+                            'IVA16' => 4,
+                        ],
+                    ],
+                    'defaults' => [
+                        'company_id' => 1,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertRedirect();
+
+        $settings = $platform->fresh()->settings;
+
+        $this->assertSame('https://odoo.example.com', $settings['url']);
+        $this->assertSame(4, $settings['odoo']['catalogs']['taxes']['IVA16']);
+        $this->assertSame(1, $settings['odoo']['defaults']['company_id']);
+    }
+
     public function test_admin_platform_test_connection_endpoint_returns_error_message_when_not_configured(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);
@@ -432,7 +489,7 @@ class AdminPanelPagesTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->actingAs($actor)->post('/admin/platforms/' . $platform->id . '/test-connection');
+        $response = $this->actingAs($actor)->post('/admin/platforms/'.$platform->id.'/test-connection');
 
         $response->assertRedirect('/admin/platforms');
         $response->assertSessionHas('error');
@@ -543,6 +600,161 @@ class AdminPanelPagesTest extends TestCase
         ]);
     }
 
+    public function test_admin_event_relationship_create_endpoint_allows_upstream_source_for_intermediate_event(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'events.manage');
+
+        $hubspot = Platform::query()->create([
+            'name' => 'HubSpot',
+            'slug' => 'hubspot',
+            'type' => 'hubspot',
+            'active' => true,
+        ]);
+
+        $odoo = Platform::query()->create([
+            'name' => 'Odoo',
+            'slug' => 'odoo',
+            'type' => 'odoo',
+            'active' => true,
+        ]);
+
+        $writeback = Event::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Write Back Source Quote',
+            'event_type_id' => 'object.updated',
+            'type' => 'node',
+            'active' => true,
+        ]);
+
+        $subscription = Event::query()->create([
+            'platform_id' => $odoo->id,
+            'to_event_id' => $writeback->id,
+            'name' => 'Create Destination Quote/Subscription',
+            'event_type_id' => 'invoice.recurring.created',
+            'type' => 'node',
+            'method_name' => 'createSaleSubscription',
+            'active' => true,
+        ]);
+
+        Event::query()->create([
+            'platform_id' => $hubspot->id,
+            'to_event_id' => $subscription->id,
+            'name' => 'Fetch Signed Quotes',
+            'event_type_id' => 'quotes.sending_data',
+            'type' => 'schedule',
+            'active' => true,
+        ]);
+
+        $sourceProperty = Property::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Terms',
+            'key' => 'hs_terms',
+            'type' => 'string',
+            'required' => false,
+            'active' => true,
+        ]);
+
+        $targetProperty = Property::query()->create([
+            'platform_id' => $odoo->id,
+            'name' => 'Odoo Note',
+            'key' => 'note',
+            'type' => 'string',
+            'required' => false,
+            'active' => true,
+        ]);
+
+        $response = $this->actingAs($actor)->post("/admin/events/{$subscription->id}/relationships", [
+            'property_id' => $sourceProperty->id,
+            'related_property_id' => $targetProperty->id,
+            'mapping_key' => 'raw.properties.hs_terms',
+            'active' => true,
+            'meta' => ['scope' => 'sale_subscription'],
+        ]);
+
+        $response->assertRedirect("/admin/events/{$subscription->id}/relationships");
+        $this->assertDatabaseHas('property_relationships', [
+            'event_id' => $subscription->id,
+            'property_id' => $sourceProperty->id,
+            'related_property_id' => $targetProperty->id,
+            'mapping_key' => 'raw.properties.hs_terms',
+            'active' => true,
+        ]);
+    }
+
+    public function test_admin_event_relationships_page_lists_upstream_source_and_current_target_for_intermediate_event(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'events.manage');
+
+        $hubspot = Platform::query()->create([
+            'name' => 'HubSpot',
+            'slug' => 'hubspot',
+            'type' => 'hubspot',
+            'active' => true,
+        ]);
+
+        $odoo = Platform::query()->create([
+            'name' => 'Odoo',
+            'slug' => 'odoo',
+            'type' => 'odoo',
+            'active' => true,
+        ]);
+
+        $writeback = Event::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Write Back Source Quote',
+            'event_type_id' => 'object.updated',
+            'type' => 'node',
+            'active' => true,
+        ]);
+
+        $subscription = Event::query()->create([
+            'platform_id' => $odoo->id,
+            'to_event_id' => $writeback->id,
+            'name' => 'Create Destination Quote/Subscription',
+            'event_type_id' => 'invoice.recurring.created',
+            'type' => 'node',
+            'active' => true,
+        ]);
+
+        Event::query()->create([
+            'platform_id' => $hubspot->id,
+            'to_event_id' => $subscription->id,
+            'name' => 'Fetch Signed Quotes',
+            'event_type_id' => 'quotes.sending_data',
+            'type' => 'schedule',
+            'active' => true,
+        ]);
+
+        Property::query()->create([
+            'platform_id' => $hubspot->id,
+            'name' => 'Terms',
+            'key' => 'hs_terms',
+            'type' => 'string',
+            'required' => false,
+            'active' => true,
+        ]);
+
+        Property::query()->create([
+            'platform_id' => $odoo->id,
+            'name' => 'Odoo Note',
+            'key' => 'note',
+            'type' => 'string',
+            'required' => false,
+            'active' => true,
+        ]);
+
+        $response = $this->actingAs($actor)->get("/admin/events/{$subscription->id}/relationships");
+
+        $response->assertStatus(200);
+        $response->assertSee('Terms');
+        $response->assertSee('Odoo Note');
+        $response->assertSee('incoming_to_current_with_next');
+    }
+
     public function test_admin_category_create_endpoint_assigns_properties(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);
@@ -581,8 +793,8 @@ class AdminPanelPagesTest extends TestCase
     private function grantPermission(User $user, string $permissionSlug): void
     {
         $role = Role::query()->create([
-            'name' => 'Temp Role ' . $permissionSlug,
-            'slug' => 'temp-role-' . str_replace('.', '-', $permissionSlug),
+            'name' => 'Temp Role '.$permissionSlug,
+            'slug' => 'temp-role-'.str_replace('.', '-', $permissionSlug),
             'description' => 'Temporary role for tests',
         ]);
 

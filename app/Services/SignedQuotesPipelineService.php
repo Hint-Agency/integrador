@@ -20,13 +20,21 @@ class SignedQuotesPipelineService
                 continue;
             }
 
-            $quoteId = (string) ($quote['quote_id'] ?? $quote['id'] ?? ('quote_' . ($index + 1)));
+            $quoteId = (string) ($quote['quote_id'] ?? $quote['id'] ?? ('quote_'.($index + 1)));
             $entities = Arr::get($quote, 'entities', []);
+            $properties = Arr::get($quote, 'properties', []);
+            if (! is_array($properties)) {
+                $properties = [];
+            }
 
             $normalized[] = [
                 'quote_id' => $quoteId,
-                'hubspot_quote_id' => Arr::get($quote, 'hubspot_quote_id'),
+                'hubspot_quote_id' => Arr::get($quote, 'hubspot_quote_id', Arr::get($quote, 'id')),
                 'status' => Arr::get($quote, 'status', 'signed'),
+                'sync_status_odoo' => Arr::get($quote, 'sync_status_odoo', Arr::get($properties, 'sync_status_odoo')),
+                'odoo_id' => Arr::get($quote, 'odoo_id', Arr::get($properties, 'odoo_id')),
+                'last_sync_odoo' => Arr::get($quote, 'last_sync_odoo', Arr::get($properties, 'last_sync_odoo')),
+                'last_error_odoo' => Arr::get($quote, 'last_error_odoo', Arr::get($properties, 'last_error_odoo')),
                 'entities' => [
                     'company' => $this->normalizeEntity(Arr::get($entities, 'company', Arr::get($quote, 'company', []))),
                     'contact' => $this->normalizeEntity(Arr::get($entities, 'contact', Arr::get($quote, 'contact', []))),
@@ -65,6 +73,10 @@ class SignedQuotesPipelineService
             return [
                 'quote_id' => $quote['quote_id'],
                 'hubspot_quote_id' => $quote['hubspot_quote_id'] ?? null,
+                'sync_status_odoo' => $quote['sync_status_odoo'] ?? null,
+                'odoo_id' => $quote['odoo_id'] ?? null,
+                'last_sync_odoo' => $quote['last_sync_odoo'] ?? null,
+                'last_error_odoo' => $quote['last_error_odoo'] ?? null,
                 'status' => $quote['status'] ?? 'signed',
                 'entity_actions' => [
                     'company' => $company,
@@ -82,9 +94,9 @@ class SignedQuotesPipelineService
         $updatedFields = $entityAction['changed_fields'] ?? [];
 
         return [
-            'last_sync_' . $targetPlatform => now()->toISOString(),
-            'sync_operation_' . $targetPlatform => $operation,
-            'updated_fields_' . $targetPlatform => $updatedFields,
+            'last_sync_'.$targetPlatform => now()->toISOString(),
+            'sync_operation_'.$targetPlatform => $operation,
+            'updated_fields_'.$targetPlatform => $updatedFields,
         ];
     }
 
@@ -102,12 +114,12 @@ class SignedQuotesPipelineService
         $updatedFields = [];
 
         foreach ($this->extractQuoteMetadataGroups($quote) as $metadata) {
-            $operation = Arr::get($metadata, 'sync_operation_' . $targetPlatform);
+            $operation = Arr::get($metadata, 'sync_operation_'.$targetPlatform);
             if (is_string($operation) && $operation !== '') {
                 $operations[] = $operation;
             }
 
-            foreach ((array) Arr::get($metadata, 'updated_fields_' . $targetPlatform, []) as $field) {
+            foreach ((array) Arr::get($metadata, 'updated_fields_'.$targetPlatform, []) as $field) {
                 if (is_scalar($field) && trim((string) $field) !== '') {
                     $updatedFields[] = (string) $field;
                 }
@@ -115,14 +127,16 @@ class SignedQuotesPipelineService
         }
 
         $properties = [
-            'last_sync_' . $targetPlatform => now()->toISOString(),
-            'sync_operation_' . $targetPlatform => $this->resolveAggregateOperation($operations),
-            'updated_fields_' . $targetPlatform => json_encode(array_values(array_unique($updatedFields)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'last_sync_'.$targetPlatform => now()->toISOString(),
+            'sync_status_'.$targetPlatform => Arr::get($executionResponse, 'sync_status', 'success'),
+            'last_error_'.$targetPlatform => Arr::get($executionResponse, 'last_error', ''),
+            'sync_operation_'.$targetPlatform => $this->resolveAggregateOperation($operations),
+            'updated_fields_'.$targetPlatform => json_encode(array_values(array_unique($updatedFields)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ];
 
-        $externalId = Arr::get($executionResponse, 'external_id');
+        $externalId = Arr::get($executionResponse, 'odoo_id', Arr::get($executionResponse, 'external_id'));
         if (is_scalar($externalId) && trim((string) $externalId) !== '') {
-            $properties[$targetPlatform . '_id'] = (string) $externalId;
+            $properties[$targetPlatform.'_id'] = is_numeric($externalId) ? (int) $externalId : (string) $externalId;
         }
 
         return $properties;
@@ -175,13 +189,13 @@ class SignedQuotesPipelineService
 
     private function evaluateEntity(array $entity, string $targetPlatform, string $entityType): array
     {
-        $targetId = Arr::get($entity, $targetPlatform . '_id');
+        $targetId = Arr::get($entity, $targetPlatform.'_id');
         $fields = Arr::get($entity, 'fields', []);
         if (! is_array($fields)) {
             $fields = [];
         }
 
-        $snapshot = Arr::get($entity, 'sync_snapshots.' . $targetPlatform, []);
+        $snapshot = Arr::get($entity, 'sync_snapshots.'.$targetPlatform, []);
         if (! is_array($snapshot)) {
             $snapshot = [];
         }
@@ -234,7 +248,7 @@ class SignedQuotesPipelineService
         $groups = [];
 
         foreach (['company', 'contact'] as $entityKey) {
-            $metadata = Arr::get($quote, 'hubspot_sync_metadata.' . $entityKey, []);
+            $metadata = Arr::get($quote, 'hubspot_sync_metadata.'.$entityKey, []);
             if (is_array($metadata) && $metadata !== []) {
                 $groups[] = $metadata;
             }

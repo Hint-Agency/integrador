@@ -2,15 +2,15 @@
 
 namespace App\Providers;
 
-use RuntimeException;
-use Illuminate\Support\ServiceProvider;
-use Illuminate\Foundation\Support\Providers\EventServiceProvider as FoundationEventServiceProvider;
 use App\Services\Aspel\AspelService;
 use App\Services\AzureSql\AzureSqlService;
-use App\Services\Hubspot\HubspotService;
-use App\Services\Odoo\OdooService;
-use App\Services\NetSuite\NetSuiteService;
 use App\Services\Generic\GenericPlatformService;
+use App\Services\Hubspot\HubspotService;
+use App\Services\NetSuite\NetSuiteService;
+use App\Services\Odoo\OdooService;
+use Illuminate\Foundation\Support\Providers\EventServiceProvider as FoundationEventServiceProvider;
+use Illuminate\Support\ServiceProvider;
+use RuntimeException;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -57,16 +57,12 @@ class AppServiceProvider extends ServiceProvider
     private function assertRequiredEnvironment(): void
     {
         $defaultConnection = (string) config('database.default');
-        $defaultDbConfig = config('database.connections.' . $defaultConnection, []);
+        $defaultDbConfig = config('database.connections.'.$defaultConnection, []);
 
         $checks = [
             'DB_CONNECTION' => $defaultConnection,
             'DB_DATABASE' => $defaultDbConfig['database'] ?? null,
             'HUBSPOT_ACCESS_TOKEN' => config('hubspot.access_token'),
-            'ODOO_URL' => config('odoo.url'),
-            'ODOO_DATABASE' => config('odoo.database'),
-            'ODOO_USERNAME' => config('odoo.username'),
-            'ODOO_PASSWORD' => config('odoo.password'),
             'NETSUITE_ACCOUNT' => config('netsuite.account'),
             'NETSUITE_CONSUMER_KEY' => config('netsuite.consumer_key'),
             'NETSUITE_CONSUMER_SECRET' => config('netsuite.consumer_secret'),
@@ -88,6 +84,7 @@ class AppServiceProvider extends ServiceProvider
         foreach ($checks as $key => $value) {
             if ($value === null) {
                 $missing[] = $key;
+
                 continue;
             }
 
@@ -101,7 +98,7 @@ class AppServiceProvider extends ServiceProvider
         }
 
         throw new RuntimeException(
-            'Missing required environment/config values: ' . implode(', ', $missing) . '.'
+            'Missing required environment/config values: '.implode(', ', $missing).'.'
         );
     }
 }

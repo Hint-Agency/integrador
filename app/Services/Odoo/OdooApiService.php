@@ -2,15 +2,20 @@
 
 namespace App\Services\Odoo;
 
+use App\Models\Platform;
+use App\Services\Odoo\Contracts\OdooApiPort;
 use App\Services\RateLimitService;
-use Illuminate\Http\Client\Response;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Arr;
 
 class OdooApiService
 {
     public function __construct(
-        protected RateLimitService $rateLimitService
+        protected RateLimitService $rateLimitService,
+        protected $platform = null
     ) {
+        if (! $this->platform instanceof Platform) {
+            $this->platform = null;
+        }
     }
 
     public function authenticate(): array
@@ -18,25 +23,7 @@ class OdooApiService
         $config = $this->config();
         $this->validateConfig($config);
 
-        $response = $this->jsonRpcCall('/jsonrpc', [
-            'service' => 'common',
-            'method' => 'login',
-            'args' => [
-                $config['database'],
-                $config['username'],
-                $config['password'],
-            ],
-        ]);
-
-        if (! $response['success']) {
-            return $response;
-        }
-
-        return [
-            'success' => true,
-            'uid' => (int) ($response['data']['result'] ?? 0),
-            'status_code' => $response['status_code'],
-        ];
+        return $this->adapter($config)->authenticate();
     }
 
     public function executeKw(string $model, string $method, array $args = [], array $kwargs = []): array
@@ -44,71 +31,54 @@ class OdooApiService
         $config = $this->config();
         $this->validateConfig($config);
 
-        $auth = $this->authenticate();
-        if (! $auth['success']) {
-            return $auth;
-        }
-
-        $payload = [
-            'service' => 'object',
-            'method' => 'execute_kw',
-            'args' => [
-                $config['database'],
-                $auth['uid'],
-                $config['password'],
-                $model,
-                $method,
-                $args,
-                (object) $kwargs,
-            ],
-        ];
-
-        return $this->jsonRpcCall('/jsonrpc', $payload);
+        return $this->adapter($config)->executeKw($model, $method, $args, $kwargs);
     }
 
-    private function jsonRpcCall(string $path, array $params): array
+    /**
+     * @return list<string>
+     */
+    public function missingConfigKeys(): array
     {
         $config = $this->config();
-        $url = rtrim((string) $config['url'], '/') . '/' . ltrim($path, '/');
+        $missing = [];
 
-        $this->rateLimitService->throttle('odoo', $path);
-
-        /** @var Response $response */
-        $response = Http::timeout((int) $config['timeout_seconds'])
-            ->acceptJson()
-            ->post($url, [
-                'jsonrpc' => '2.0',
-                'method' => 'call',
-                'params' => $params,
-                'id' => uniqid('odoo_', true),
-            ]);
-
-        $decoded = $response->json() ?? [];
-
-        if ($response->failed() || isset($decoded['error'])) {
-            return [
-                'success' => false,
-                'status_code' => $response->status(),
-                'message' => 'Odoo request failed.',
-                'error' => $decoded['error'] ?? ['raw' => $response->body()],
-            ];
+        foreach (['url', 'database', 'username', 'password'] as $key) {
+            if (! isset($config[$key]) || $config[$key] === null || $config[$key] === '') {
+                $missing[] = $key;
+            }
         }
 
-        return [
-            'success' => true,
-            'status_code' => $response->status(),
-            'data' => $decoded,
-        ];
+        return $missing;
     }
 
     private function config(): array
     {
+        $credentials = $this->platform instanceof Platform ? ($this->platform->credentials ?? []) : [];
+        $settings = $this->platform instanceof Platform ? ($this->platform->settings ?? []) : [];
+        $odooSettings = Arr::get($settings, 'odoo', []);
+        $odooCredentials = Arr::get($credentials, 'odoo', []);
+
         return [
-            'url' => config('odoo.url'),
-            'database' => config('odoo.database'),
-            'username' => config('odoo.username'),
-            'password' => config('odoo.password'),
-            'timeout_seconds' => (int) config('odoo.timeout_seconds', 30),
+            'url' => Arr::get($odooSettings, 'url')
+                ?? Arr::get($settings, 'url')
+                ?? Arr::get($settings, 'base_url')
+                ?? Arr::get($settings, 'api_url')
+                ?? config('odoo.url'),
+            'database' => Arr::get($odooCredentials, 'database')
+                ?? Arr::get($credentials, 'database')
+                ?? config('odoo.database'),
+            'username' => Arr::get($odooCredentials, 'username')
+                ?? Arr::get($credentials, 'username')
+                ?? config('odoo.username'),
+            'password' => Arr::get($odooCredentials, 'password')
+                ?? Arr::get($credentials, 'password')
+                ?? config('odoo.password'),
+            'timeout_seconds' => (int) (
+                Arr::get($odooSettings, 'timeout_seconds')
+                ?? Arr::get($settings, 'timeout_seconds')
+                ?? config('odoo.timeout_seconds', 30)
+            ),
+            'adapter' => $this->resolveAdapter($credentials, $settings),
         ];
     }
 
@@ -116,8 +86,36 @@ class OdooApiService
     {
         foreach (['url', 'database', 'username', 'password'] as $key) {
             if (! isset($config[$key]) || $config[$key] === null || $config[$key] === '') {
-                throw new \RuntimeException('Missing Odoo config key: ' . $key);
+                throw new \RuntimeException('Missing Odoo config key: '.$key);
             }
         }
+    }
+
+    private function resolveAdapter(array $credentials, array $settings): string
+    {
+        $adapter = Arr::get($settings, 'odoo.adapter')
+            ?? Arr::get($settings, 'odoo.protocol')
+            ?? Arr::get($settings, 'odoo_adapter')
+            ?? Arr::get($settings, 'protocol')
+            ?? Arr::get($credentials, 'odoo.adapter')
+            ?? Arr::get($credentials, 'adapter');
+
+        if (is_string($adapter) && trim($adapter) !== '') {
+            return match (strtolower(trim($adapter))) {
+                'xmlrpc', 'xml-rpc', 'xml_rpc' => 'xml_rpc',
+                default => 'json_rpc',
+            };
+        }
+
+        return $this->platform instanceof Platform ? 'xml_rpc' : 'json_rpc';
+    }
+
+    private function adapter(array $config): OdooApiPort
+    {
+        if (($config['adapter'] ?? 'json_rpc') === 'xml_rpc') {
+            return new OdooXmlRpcAdapter($config);
+        }
+
+        return new OdooJsonRpcAdapter($this->rateLimitService, $config);
     }
 }

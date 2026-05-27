@@ -4,9 +4,9 @@ namespace App\Services\Hubspot;
 
 use App\Jobs\ProcessSignedQuotesJob;
 use App\Models\Event;
+use App\Models\Platform;
 use App\Models\Property;
 use App\Models\PropertyRelationship;
-use App\Models\Platform;
 use App\Models\Record;
 use App\Services\Base\BaseService;
 use Illuminate\Support\Arr;
@@ -91,6 +91,7 @@ class HubspotService extends BaseService
                     'index' => $index,
                     'error' => 'Invalid product payload.',
                 ];
+
                 continue;
             }
 
@@ -100,22 +101,26 @@ class HubspotService extends BaseService
                     'index' => $index,
                     'error' => $validation,
                 ];
+
                 continue;
             }
 
             $payload = $this->sanitizeProductPayload($product);
-            $result = $this->hubspotApi->createProduct($payload);
+            $properties = $this->hubspotProductProperties($payload);
+            $result = $this->hubspotApi->createProduct($properties);
 
             if (! $result['success']) {
                 $errors[] = [
                     'index' => $index,
                     'error' => $result['error'] ?? $result['message'] ?? 'Unknown error',
+                    'attempted_properties' => $properties,
                 ];
+
                 continue;
             }
 
             $created[] = $result['data'];
-            $outputPayload[] = array_merge($payload, [
+            $outputPayload[] = array_merge($properties, [
                 'hubspot_id' => Arr::get($result, 'data.id'),
             ]);
         }
@@ -161,6 +166,7 @@ class HubspotService extends BaseService
         foreach ($updateProducts as $index => $product) {
             if (! is_array($product)) {
                 $errors[] = ['index' => $index, 'error' => 'Invalid product payload.'];
+
                 continue;
             }
 
@@ -170,16 +176,18 @@ class HubspotService extends BaseService
                     'index' => $index,
                     'error' => $validation,
                 ];
+
                 continue;
             }
 
             $payload = $this->sanitizeProductPayload($product);
-            $productId = (string) ($payload['id'] ?? $payload['hubspot_id'] ?? '');
+            $productId = $this->resolveExplicitHubspotProductId($payload);
             if ($productId === '') {
                 $resolved = $this->resolveHubspotProductId($payload);
 
                 if (($resolved['match_status'] ?? null) === 'not_found') {
                     $notFound[] = $payload;
+
                     continue;
                 }
 
@@ -190,6 +198,7 @@ class HubspotService extends BaseService
                         'details' => $resolved['error'] ?? null,
                         'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
                     ];
+
                     continue;
                 }
 
@@ -198,15 +207,11 @@ class HubspotService extends BaseService
 
             if ($productId === '') {
                 $errors[] = ['index' => $index, 'error' => 'Missing HubSpot product id.'];
+
                 continue;
             }
 
-            $properties = $payload;
-            unset(
-                $properties['id'],
-                $properties['hubspot_id'],
-                $properties['_event_metadata']
-            );
+            $properties = $this->hubspotProductProperties($payload);
 
             $result = $this->hubspotApi->updateProduct($productId, $properties);
             if (! $result['success']) {
@@ -214,7 +219,9 @@ class HubspotService extends BaseService
                     'index' => $index,
                     'product_id' => $productId,
                     'error' => $result['error'] ?? $result['message'] ?? 'Unknown error',
+                    'attempted_properties' => $properties,
                 ];
+
                 continue;
             }
 
@@ -252,8 +259,10 @@ class HubspotService extends BaseService
     private function resolveHubspotProductId(array $product): array
     {
         $criteria = [
+            ['property' => 'odoo_id', 'value' => $product['odoo_id'] ?? $this->resolveOdooProductTemplateId($product) ?? $product['id'] ?? null],
             ['property' => 'identificador_db', 'value' => $product['identificador_db'] ?? null],
-            ['property' => 'sku', 'value' => $product['sku'] ?? null],
+            ['property' => 'hs_sku', 'value' => $product['hs_sku'] ?? null],
+            ['property' => 'sku', 'value' => $product['sku'] ?? $product['default_code'] ?? null],
         ];
 
         $attempted = [];
@@ -313,20 +322,152 @@ class HubspotService extends BaseService
         ];
     }
 
+    private function resolveExplicitHubspotProductId(array $payload): string
+    {
+        if (isset($payload['hubspot_id']) && is_scalar($payload['hubspot_id'])) {
+            return trim((string) $payload['hubspot_id']);
+        }
+
+        $id = $payload['id'] ?? null;
+        if (! is_scalar($id) || trim((string) $id) === '') {
+            return '';
+        }
+
+        $hasOdooShape = isset($payload['odoo_id'])
+            || isset($payload['default_code'])
+            || isset($payload['product_tmpl_id'])
+            || isset($payload['list_prices'])
+            || (isset($payload['_event_metadata']['source_platform']) && strtolower((string) $payload['_event_metadata']['source_platform']) === 'odoo');
+
+        return $hasOdooShape ? '' : trim((string) $id);
+    }
+
     private function sanitizeProductPayload(array $product): array
     {
         unset($product['_event_metadata']);
 
+        if (! isset($product['sku']) && isset($product['default_code']) && is_scalar($product['default_code'])) {
+            $product['sku'] = (string) $product['default_code'];
+        }
+
+        $hasOdooShape = isset($product['default_code'])
+            || isset($product['product_tmpl_id'])
+            || isset($product['list_prices'])
+            || (isset($product['_event_metadata']['source_platform']) && strtolower((string) $product['_event_metadata']['source_platform']) === 'odoo');
+
+        if ($hasOdooShape) {
+            $productTemplateId = $this->resolveOdooProductTemplateId($product);
+            if ($productTemplateId !== null) {
+                $variantId = $product['id'] ?? $product['odoo_product_id'] ?? $product['odoo_id'] ?? null;
+                if (is_scalar($variantId) && trim((string) $variantId) !== '' && (string) $variantId !== (string) $productTemplateId) {
+                    $product['odoo_product_id'] = (string) $variantId;
+                }
+
+                $product['odoo_id'] = (string) $productTemplateId;
+            } elseif (! isset($product['odoo_id']) && isset($product['id']) && is_scalar($product['id'])) {
+                $product['odoo_id'] = (string) $product['id'];
+            }
+
+            unset($product['id']);
+        }
+
         return $product;
+    }
+
+    /**
+     * @return array<string, string|int|float|bool>
+     */
+    private function hubspotProductProperties(array $payload): array
+    {
+        $properties = [];
+        $mappedKeys = $this->mappedHubspotProductPropertyKeys();
+
+        foreach ($payload as $key => $value) {
+            if (! is_string($key) || in_array($key, ['id', 'hubspot_id', '_event_metadata'], true)) {
+                continue;
+            }
+
+            if ($mappedKeys !== [] && ! in_array($key, $mappedKeys, true)) {
+                continue;
+            }
+
+            if (! is_scalar($value) || $value === '') {
+                continue;
+            }
+
+            $properties[$key] = $value;
+        }
+
+        return $properties;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function mappedHubspotProductPropertyKeys(): array
+    {
+        $events = [];
+
+        if ($this->event) {
+            $events[] = $this->event;
+        }
+
+        $record = $this->record;
+        while ($record) {
+            $record->loadMissing('event.propertyRelationships.relatedProperty', 'parent');
+            if ($record->event) {
+                $events[] = $record->event;
+            }
+
+            $record = $record->parent;
+        }
+
+        $keys = [];
+        foreach ($events as $event) {
+            $event->loadMissing('propertyRelationships.relatedProperty');
+            foreach ($event->propertyRelationships as $relationship) {
+                if (! $relationship->active) {
+                    continue;
+                }
+
+                $relatedProperty = $relationship->relatedProperty;
+                if (! $relatedProperty || (int) $relatedProperty->platform_id !== (int) $this->platform->id) {
+                    continue;
+                }
+
+                $key = $relatedProperty->key ?: $relatedProperty->name;
+                if (is_string($key) && trim($key) !== '') {
+                    $keys[] = trim($key);
+                }
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function resolveOdooProductTemplateId(array $product): ?string
+    {
+        $template = $product['product_tmpl_id'] ?? $product['product_template_id'] ?? null;
+
+        if (is_array($template)) {
+            $template = $template[0] ?? null;
+        }
+
+        if (! is_scalar($template) || trim((string) $template) === '') {
+            return null;
+        }
+
+        return trim((string) $template);
     }
 
     private function validateProductPayload(array $product): ?string
     {
         $identifier = trim((string) ($product['identificador_db'] ?? ''));
-        $sku = trim((string) ($product['sku'] ?? ''));
+        $sku = trim((string) ($product['sku'] ?? $product['default_code'] ?? ''));
+        $odooId = trim((string) ($product['odoo_id'] ?? $product['id'] ?? ''));
 
-        if ($identifier === '' && $sku === '') {
-            return 'Product payload requires identificador_db or sku.';
+        if ($identifier === '' && $sku === '' && $odooId === '') {
+            return 'Product payload requires identificador_db, sku/default_code, or odoo_id.';
         }
 
         return null;
@@ -363,90 +504,114 @@ class HubspotService extends BaseService
         $quotes = $this->event?->meta['signed_quotes_sample']
             ?? $this->record?->payload['quotes']
             ?? null;
-
+        $source = 'payload';
         if ($quotes === null) {
-            $remote = $this->hubspotApi->searchSignedQuotes();
+            $remote = $this->hubspotApi->searchSignedQuotes($this->event);
             if ($remote['success']) {
                 $quotes = Arr::get($remote, 'data.results', []);
+                $source = 'hubspot_search';
+            } else {
+                return [
+                    'success' => false,
+                    'message' => 'Failed to fetch signed quotes from HubSpot.',
+                    'data' => [
+                        'error' => $remote['error'] ?? null,
+                        'status_code' => $remote['status_code'] ?? null,
+                    ],
+                ];
             }
         }
 
         if (! is_array($quotes) || empty($quotes)) {
-            $quotes = [[
-                'quote_id' => 'qs_' . now()->format('YmdHis'),
-                'hubspot_quote_id' => 'hsq_' . now()->timestamp,
-                'status' => 'signed',
-                'entities' => [
-                    'company' => [
-                        'hubspot_id' => 'cmp_001',
-                        'odoo_id' => null,
-                        'fields' => [
-                            'name' => 'Example Company',
-                            'vat' => 'RFC-EXAMPLE-01',
-                            'country' => 'MX',
-                        ],
-                        'sync_snapshots' => [
-                            'odoo' => [],
-                        ],
-                    ],
-                    'contact' => [
-                        'hubspot_id' => 'ctc_001',
-                        'odoo_id' => null,
-                        'fields' => [
-                            'firstname' => 'John',
-                            'lastname' => 'Doe',
-                            'email' => 'john.doe@example.com',
-                        ],
-                        'sync_snapshots' => [
-                            'odoo' => [],
-                        ],
-                    ],
-                    'products' => [[
-                        'hubspot_id' => 'prd_001',
-                        'odoo_id' => null,
-                        'fields' => [
-                            'name' => 'Subscription Starter',
-                            'default_code' => 'SUB-START',
-                            'price' => 99,
-                        ],
-                        'sync_snapshots' => [
-                            'odoo' => [],
-                        ],
-                    ]],
-                ],
-            ]];
+            return $this->success('No signed quotes found in HubSpot.', [
+                'count' => 0,
+                'quotes' => [],
+                'source' => $source,
+                'output_payload' => [],
+            ]);
         }
 
+        $queued = 0;
         if ($this->record) {
-            ProcessSignedQuotesJob::dispatch($quotes, $this->event, $this->record)->onQueue('signed-quotes');
+            foreach (array_values($quotes) as $quote) {
+                if (! is_array($quote)) {
+                    continue;
+                }
+
+                ProcessSignedQuotesJob::dispatch([$quote], $this->event, $this->record)->onQueue('signed-quotes');
+                $queued++;
+            }
         }
 
         return $this->success('Signed quotes queued.', [
             'count' => count($quotes),
+            'queued_count' => $queued,
+            'source' => $source,
             'quotes' => $quotes,
+            'output_payload' => [],
         ]);
     }
 
     public function getArchivedQuotes(): array
     {
-        $response = $this->hubspotApi->request('GET', '/crm/v3/objects/quotes', [], [
-            'archived' => true,
-            'limit' => 100,
-        ]);
+        $quotes = [];
+        $after = null;
+        $pages = 0;
+        $properties = $this->archivedQuoteProperties();
 
-        if (! $response['success']) {
-            return [
-                'success' => false,
-                'message' => 'Failed to fetch archived quotes from HubSpot.',
-                'data' => [
-                    'error' => $response['error'] ?? null,
-                ],
+        do {
+            $query = [
+                'archived' => true,
+                'limit' => 100,
+                'properties' => implode(',', $properties),
             ];
-        }
+
+            if ($after !== null) {
+                $query['after'] = $after;
+            }
+
+            $response = $this->hubspotApi->request('GET', '/crm/v3/objects/quotes', [], $query);
+
+            if (! $response['success']) {
+                return [
+                    'success' => false,
+                    'message' => 'Failed to fetch archived quotes from HubSpot.',
+                    'data' => [
+                        'error' => $response['error'] ?? null,
+                        'pages' => $pages,
+                    ],
+                ];
+            }
+
+            $pages++;
+            $results = Arr::get($response, 'data.results', []);
+            if (is_array($results)) {
+                $quotes = array_merge($quotes, array_filter($results, 'is_array'));
+            }
+
+            $after = Arr::get($response, 'data.paging.next.after');
+        } while (is_scalar($after) && trim((string) $after) !== '');
+
+        $syncedStatuses = $this->archivedQuoteSyncedStatuses();
+        $cancelableQuotes = array_values(array_filter(
+            $quotes,
+            fn (array $quote): bool => in_array(
+                strtolower(trim((string) Arr::get($quote, 'properties.sync_status_odoo', ''))),
+                $syncedStatuses,
+                true
+            )
+        ));
 
         return $this->success('Archived quotes fetched from HubSpot.', [
-            'count' => count(Arr::get($response, 'data.results', [])),
-            'quotes' => Arr::get($response, 'data.results', []),
+            'count' => count($cancelableQuotes),
+            'archived_count' => count($quotes),
+            'filtered_count' => count($quotes) - count($cancelableQuotes),
+            'pages' => $pages,
+            'required_sync_statuses' => $syncedStatuses,
+            'quotes' => $cancelableQuotes,
+            'output_payload' => [
+                'quotes' => $cancelableQuotes,
+            ],
         ]);
     }
 
@@ -506,8 +671,10 @@ class HubspotService extends BaseService
         }
 
         $payload = $this->resolvePayloadFromContext();
+        $originalPayload = $payload;
         $objectType = $this->resolveObjectType('companies');
         $objectId = (string) ($payload['id'] ?? $payload['hubspot_id'] ?? '');
+        $properties = Arr::get($payload, 'properties');
 
         if ($objectId === '') {
             return [
@@ -517,9 +684,15 @@ class HubspotService extends BaseService
             ];
         }
 
-        unset($payload['id'], $payload['hubspot_id']);
+        if (is_array($properties)) {
+            $payload = $properties;
+        } else {
+            unset($payload['id'], $payload['hubspot_id']);
+        }
 
         $response = $this->hubspotApi->updateObject($objectType, $objectId, $payload);
+        $quoteDealNote = $this->tryLogQuoteSyncDealNote($objectType, $objectId, $originalPayload, $payload, $response);
+
         if (! $response['success']) {
             $noteResult = $this->tryLogContactFailureNote(
                 $objectType,
@@ -534,13 +707,403 @@ class HubspotService extends BaseService
                 'data' => [
                     'error' => $response['error'] ?? null,
                     'hubspot_note' => $noteResult,
+                    'hubspot_deal_note' => $quoteDealNote,
                 ],
             ];
         }
 
         return $this->success('Object updated in HubSpot.', [
             'data' => $response['data'] ?? [],
+            'hubspot_deal_note' => $quoteDealNote,
         ]);
+    }
+
+    public function updateQuoteObject(): array
+    {
+        if (! $this->record) {
+            return [
+                'success' => false,
+                'message' => 'Record context is required for HubSpot quote update.',
+                'data' => [
+                    'reason' => 'missing_record_context',
+                ],
+            ];
+        }
+
+        $payload = $this->resolvePayloadFromContext();
+        $items = $this->normalizeQuoteWritebackPayloads($payload);
+        $objectType = $this->resolveObjectType('quotes');
+        $acceptedIdFields = ['id', 'hubspot_id', 'hubspot_quote_id', 'quote_id', 'hs_object_id', 'properties.hs_object_id'];
+
+        if ($items === []) {
+            return [
+                'success' => false,
+                'message' => 'No HubSpot quote payloads found for update.',
+                'data' => [
+                    'reason' => 'empty_quote_writeback_payload',
+                    'object_type' => $objectType,
+                    'accepted_id_fields' => $acceptedIdFields,
+                ],
+            ];
+        }
+
+        $results = [];
+        $errors = [];
+
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                $errors[] = [
+                    'index' => $index,
+                    'reason' => 'invalid_quote_payload',
+                    'object_type' => $objectType,
+                    'payload_type' => get_debug_type($item),
+                ];
+
+                continue;
+            }
+
+            $objectId = $this->firstScalar([
+                Arr::get($item, 'id'),
+                Arr::get($item, 'hubspot_id'),
+                Arr::get($item, 'hubspot_quote_id'),
+                Arr::get($item, 'quote_id'),
+                Arr::get($item, 'hs_object_id'),
+                Arr::get($item, 'properties.hs_object_id'),
+            ]);
+            $properties = Arr::get($item, 'properties');
+
+            if ($objectId === null) {
+                $errors[] = [
+                    'index' => $index,
+                    'reason' => 'missing_hubspot_quote_id',
+                    'object_type' => $objectType,
+                    'accepted_id_fields' => $acceptedIdFields,
+                    'payload_keys' => array_keys($item),
+                ];
+
+                continue;
+            }
+
+            if (! is_array($properties) || $properties === []) {
+                $errors[] = [
+                    'index' => $index,
+                    'reason' => 'missing_quote_writeback_properties',
+                    'object_type' => $objectType,
+                    'object_id' => $objectId,
+                    'payload_keys' => array_keys($item),
+                ];
+
+                continue;
+            }
+
+            $response = $this->hubspotApi->updateObject($objectType, $objectId, $properties);
+            $quoteDealNote = $this->tryLogQuoteSyncDealNote($objectType, $objectId, $item, $properties, $response);
+
+            $entry = [
+                'index' => $index,
+                'object_type' => $objectType,
+                'object_id' => $objectId,
+                'quote_id' => $item['quote_id'] ?? $item['hubspot_quote_id'] ?? $objectId,
+                'hubspot_deal_note' => $quoteDealNote,
+                'hubspot_response' => $response['data'] ?? [],
+                'status_code' => $response['status_code'] ?? null,
+            ];
+
+            if (! ($response['success'] ?? false)) {
+                $errors[] = $entry + [
+                    'reason' => 'hubspot_quote_update_failed',
+                    'error' => $response['error'] ?? null,
+                ];
+
+                continue;
+            }
+
+            $results[] = $entry;
+        }
+
+        $updatedCount = count($results);
+        $errorCount = count($errors);
+        $data = [
+            'object_type' => $objectType,
+            'updated_count' => $updatedCount,
+            'error_count' => $errorCount,
+            'results' => $results,
+            'errors' => $errors,
+        ];
+
+        if ($updatedCount === 0 && $errorCount > 0) {
+            return [
+                'success' => false,
+                'message' => 'Failed to update HubSpot quote object.',
+                'data' => $data,
+            ];
+        }
+
+        if ($errorCount > 0) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'HubSpot quote write-back completed with warnings.',
+                'data' => $data,
+            ];
+        }
+
+        return $this->success('HubSpot quote object updated.', $data);
+    }
+
+    public function writeBackArchivedQuoteCancellation(): array
+    {
+        if (! $this->record) {
+            return [
+                'success' => false,
+                'message' => 'Record context is required for HubSpot archived quote cancellation write-back.',
+                'data' => [
+                    'reason' => 'missing_record_context',
+                ],
+            ];
+        }
+
+        $payload = $this->resolvePayloadFromContext();
+        $items = $this->normalizeQuoteWritebackPayloads($payload);
+        $objectType = $this->resolveObjectType('quotes');
+
+        if ($items === []) {
+            return [
+                'success' => false,
+                'message' => 'No archived quote cancellation payloads found for write-back.',
+                'data' => [
+                    'reason' => 'empty_archived_quote_cancellation_payload',
+                    'object_type' => $objectType,
+                ],
+            ];
+        }
+
+        $results = [];
+        $errors = [];
+
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                $errors[] = [
+                    'index' => $index,
+                    'reason' => 'invalid_quote_payload',
+                    'payload_type' => get_debug_type($item),
+                ];
+
+                continue;
+            }
+
+            $objectId = $this->firstScalar([
+                Arr::get($item, 'id'),
+                Arr::get($item, 'hubspot_id'),
+                Arr::get($item, 'hubspot_quote_id'),
+                Arr::get($item, 'quote_id'),
+                Arr::get($item, 'hs_object_id'),
+                Arr::get($item, 'properties.hs_object_id'),
+            ]);
+            $properties = Arr::get($item, 'properties');
+
+            if ($objectId === null || ! is_array($properties) || $properties === []) {
+                $errors[] = [
+                    'index' => $index,
+                    'reason' => $objectId === null ? 'missing_hubspot_quote_id' : 'missing_quote_writeback_properties',
+                    'payload_keys' => array_keys($item),
+                ];
+
+                continue;
+            }
+
+            $response = $this->hubspotApi->updateObject($objectType, $objectId, $properties);
+            $quoteDealNote = $this->tryLogArchivedQuoteCancellationDealNote($objectType, $objectId, $item, $properties, $response);
+
+            $entry = [
+                'index' => $index,
+                'object_type' => $objectType,
+                'object_id' => $objectId,
+                'quote_id' => $item['quote_id'] ?? $item['hubspot_quote_id'] ?? $objectId,
+                'hubspot_deal_note' => $quoteDealNote,
+                'hubspot_response' => $response['data'] ?? [],
+                'status_code' => $response['status_code'] ?? null,
+            ];
+
+            if (! ($response['success'] ?? false)) {
+                $errors[] = $entry + [
+                    'reason' => 'hubspot_archived_quote_update_failed',
+                    'error' => $response['error'] ?? null,
+                ];
+
+                continue;
+            }
+
+            $results[] = $entry;
+        }
+
+        $updatedCount = count($results);
+        $errorCount = count($errors);
+        $data = [
+            'object_type' => $objectType,
+            'updated_count' => $updatedCount,
+            'error_count' => $errorCount,
+            'results' => $results,
+            'errors' => $errors,
+        ];
+
+        if ($updatedCount === 0 && $errorCount > 0) {
+            return [
+                'success' => false,
+                'message' => 'Failed to write back HubSpot archived quote cancellation.',
+                'data' => $data,
+            ];
+        }
+
+        if ($errorCount > 0) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'HubSpot archived quote cancellation write-back completed with warnings.',
+                'data' => $data,
+            ];
+        }
+
+        return $this->success('HubSpot archived quote cancellation written back.', $data);
+    }
+
+    public function createOrUpdateInvoiceObject(array $payload): array
+    {
+        $invoice = Arr::get($payload, 'invoice', $payload);
+        if (! is_array($invoice)) {
+            return [
+                'success' => false,
+                'message' => 'Invalid invoice payload for HubSpot invoice object sync.',
+                'data' => ['reason' => 'invalid_invoice_payload'],
+            ];
+        }
+
+        $objectType = (string) ($this->event?->meta['invoice_object_type'] ?? $this->event?->meta['object_type'] ?? 'invoices');
+        $idProperty = (string) ($this->event?->meta['invoice_match_property'] ?? 'odoo_id');
+        $invoiceId = $this->firstScalar([
+            Arr::get($invoice, 'id'),
+            Arr::get($invoice, 'odoo_id'),
+            Arr::get($payload, 'source.id'),
+        ]);
+
+        if ($invoiceId === null) {
+            return [
+                'success' => false,
+                'message' => 'Missing Odoo invoice id for HubSpot invoice object sync.',
+                'data' => ['reason' => 'missing_invoice_id'],
+            ];
+        }
+
+        $properties = $this->buildInvoiceObjectProperties($payload, $invoice, (string) $invoiceId);
+        $match = $this->findInvoiceObjectMatch($objectType, $idProperty, (string) $invoiceId, $properties);
+
+        if (! ($match['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to search HubSpot invoice object.',
+                'data' => [
+                    'object_type' => $objectType,
+                    'match_property' => $idProperty,
+                    'invoice_id' => (string) $invoiceId,
+                    'error' => $match['error'] ?? null,
+                ],
+            ];
+        }
+
+        if (($match['status'] ?? null) === 'warning') {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'Multiple HubSpot invoice objects matched Odoo invoice id.',
+                'data' => [
+                    'warning_reason' => 'multiple_invoice_matches',
+                    'object_type' => $objectType,
+                    'match_property' => $match['match_property'] ?? $idProperty,
+                    'invoice_id' => (string) $invoiceId,
+                    'matches' => $match['matches'] ?? [],
+                ],
+            ];
+        }
+
+        $operation = 'created';
+        $objectId = $match['object_id'] ?? null;
+        if (is_scalar($objectId) && trim((string) $objectId) !== '') {
+            $objectId = (string) $objectId;
+            $response = $this->hubspotApi->updateObject($objectType, $objectId, $properties);
+            $operation = 'updated';
+        } else {
+            $response = $this->hubspotApi->createObject($objectType, $properties);
+            $objectId = (string) Arr::get($response, 'data.id', '');
+        }
+
+        if (! ($response['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to create or update HubSpot invoice object.',
+                'data' => [
+                    'operation' => $operation,
+                    'object_type' => $objectType,
+                    'invoice_id' => (string) $invoiceId,
+                    'properties' => $properties,
+                    'error' => $response['error'] ?? null,
+                ],
+            ];
+        }
+
+        $dealId = $this->resolveInvoiceDealId($payload);
+        $warnings = [];
+        $association = null;
+        if ($dealId && $objectId !== '') {
+            $associationTypeId = $this->event?->meta['invoice_to_deal_association_type_id'] ?? null;
+            $association = $this->hubspotApi->associateObjects(
+                $objectType,
+                $objectId,
+                'deals',
+                $dealId,
+                is_numeric($associationTypeId) ? (int) $associationTypeId : null
+            );
+
+            if (! ($association['success'] ?? false)) {
+                $warnings[] = [
+                    'reason' => 'invoice_deal_association_failed',
+                    'deal_id' => $dealId,
+                    'object_id' => $objectId,
+                    'error' => $association['error'] ?? null,
+                ];
+            }
+        } else {
+            $warnings[] = [
+                'reason' => 'hubspot_deal_id_missing',
+                'object_id' => $objectId,
+            ];
+        }
+
+        $data = [
+            'operation' => $operation,
+            'object_type' => $objectType,
+            'object_id' => $objectId,
+            'invoice_id' => (string) $invoiceId,
+            'deal_id' => $dealId,
+            'properties' => $properties,
+            'match' => [
+                'property' => $match['match_property'] ?? $idProperty,
+                'value' => $match['match_value'] ?? (string) $invoiceId,
+            ],
+            'hubspot_response' => $response['data'] ?? [],
+            'association' => $association,
+            'warnings' => $warnings,
+        ];
+
+        if ($warnings !== []) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'HubSpot invoice object synchronized with warnings.',
+                'data' => $data,
+            ];
+        }
+
+        return $this->success('HubSpot invoice object synchronized.', $data);
     }
 
     public function updateCompany(array $payload): array
@@ -921,7 +1484,7 @@ class HubspotService extends BaseService
                 'message' => 'HubSpot token configured but validation request failed.',
                 'data' => [
                     'configured' => true,
-                    'token_masked' => str_repeat('*', max(0, strlen($token) - 4)) . substr($token, -4),
+                    'token_masked' => str_repeat('*', max(0, strlen($token) - 4)).substr($token, -4),
                     'status_code' => $ping['status_code'] ?? 0,
                 ],
             ];
@@ -932,7 +1495,7 @@ class HubspotService extends BaseService
             'message' => 'HubSpot credentials validated.',
             'data' => [
                 'configured' => true,
-                'token_masked' => str_repeat('*', max(0, strlen($token) - 4)) . substr($token, -4),
+                'token_masked' => str_repeat('*', max(0, strlen($token) - 4)).substr($token, -4),
                 'account' => Arr::get($ping, 'data.portalId'),
             ],
         ];
@@ -968,6 +1531,264 @@ class HubspotService extends BaseService
         return $default;
     }
 
+    /**
+     * @return array<int, mixed>
+     */
+    private function normalizeQuoteWritebackPayloads(array $payload): array
+    {
+        if ($payload === []) {
+            return [];
+        }
+
+        if (array_is_list($payload)) {
+            return $payload;
+        }
+
+        foreach (['quotes', 'items', 'output_payload', 'data'] as $key) {
+            $items = Arr::get($payload, $key);
+            if (is_array($items) && array_is_list($items)) {
+                return $items;
+            }
+        }
+
+        return [$payload];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function archivedQuoteProperties(): array
+    {
+        $configured = config('hubspot.archived_quotes.properties');
+        $defaults = [
+            'hs_object_id',
+            'hs_quote_number',
+            'hs_title',
+            'sync_status_odoo',
+            'last_sync_odoo',
+            'last_error_odoo',
+            'odoo_id',
+        ];
+
+        return is_array($configured)
+            ? array_values(array_unique(array_filter([...$configured, ...$defaults], 'is_string')))
+            : $defaults;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function archivedQuoteSyncedStatuses(): array
+    {
+        $statuses = config('hubspot.archived_quotes.synced_status_values', ['success']);
+        if (! is_array($statuses) || $statuses === []) {
+            $statuses = ['success'];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn (mixed $status): string => is_scalar($status) ? strtolower(trim((string) $status)) : '',
+            $statuses
+        ))));
+    }
+
+    private function firstScalar(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            if (! is_scalar($candidate) || trim((string) $candidate) === '') {
+                continue;
+            }
+
+            return trim((string) $candidate);
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string, scalar|null>
+     */
+    private function findInvoiceObjectMatch(string $objectType, string $idProperty, string $invoiceId, array $properties): array
+    {
+        $searches = [[$idProperty, $invoiceId]];
+
+        foreach (Arr::wrap($this->event?->meta['invoice_match_fallback_properties'] ?? []) as $fallbackProperty) {
+            if (! is_string($fallbackProperty) || trim($fallbackProperty) === '') {
+                continue;
+            }
+
+            $fallbackProperty = trim($fallbackProperty);
+            $fallbackValue = $properties[$fallbackProperty] ?? null;
+            if (is_scalar($fallbackValue) && trim((string) $fallbackValue) !== '') {
+                $searches[] = [$fallbackProperty, trim((string) $fallbackValue)];
+            }
+        }
+
+        foreach ($searches as [$property, $value]) {
+            $search = $this->hubspotApi->searchObjectByProperty($objectType, $property, (string) $value, array_keys($properties));
+            if (! ($search['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'match_property' => $property,
+                    'match_value' => (string) $value,
+                    'error' => $search['error'] ?? null,
+                ];
+            }
+
+            $results = Arr::get($search, 'data.results', []);
+            if (! is_array($results)) {
+                $results = [];
+            }
+
+            if (count($results) > 1) {
+                return [
+                    'success' => true,
+                    'status' => 'warning',
+                    'match_property' => $property,
+                    'match_value' => (string) $value,
+                    'matches' => $results,
+                ];
+            }
+
+            if (count($results) === 1) {
+                return [
+                    'success' => true,
+                    'object_id' => (string) Arr::get($results, '0.id'),
+                    'match_property' => $property,
+                    'match_value' => (string) $value,
+                ];
+            }
+        }
+
+        return [
+            'success' => true,
+            'object_id' => null,
+            'match_property' => $idProperty,
+            'match_value' => $invoiceId,
+        ];
+    }
+
+    private function buildInvoiceObjectProperties(array $payload, array $invoice, string $invoiceId): array
+    {
+        $properties = [
+            'odoo_id' => $invoiceId,
+            'last_sync_odoo' => now()->toISOString(),
+            'sync_status_odoo' => 'success',
+        ];
+
+        $properties = $this->applyInvoiceObjectRelationshipMappings($properties, $payload);
+
+        $configuredMap = $this->event?->meta['invoice_property_map'] ?? [];
+        if (is_array($configuredMap)) {
+            foreach ($configuredMap as $hubspotProperty => $sourcePath) {
+                if (! is_string($hubspotProperty) || trim($hubspotProperty) === '' || ! is_string($sourcePath) || trim($sourcePath) === '') {
+                    continue;
+                }
+
+                $value = Arr::get($payload, $sourcePath);
+                if (is_scalar($value) || $value === null) {
+                    $properties[trim($hubspotProperty)] = $value;
+                }
+            }
+        }
+
+        return array_filter($properties, static fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    /**
+     * @param array<string, mixed> $properties
+     * @return array<string, mixed>
+     */
+    private function applyInvoiceObjectRelationshipMappings(array $properties, array $payload): array
+    {
+        foreach ($this->invoiceObjectMappingEvents() as $event) {
+            $event->loadMissing(['propertyRelationships.property', 'propertyRelationships.relatedProperty']);
+
+            foreach ($event->propertyRelationships as $relationship) {
+                if (! $relationship instanceof PropertyRelationship || ! $relationship->active) {
+                    continue;
+                }
+
+                $targetKey = $relationship->relatedProperty?->key ?: $relationship->relatedProperty?->name;
+                if (! is_string($targetKey) || trim($targetKey) === '' || $this->isInvoiceObjectTechnicalPropertyKey($targetKey)) {
+                    continue;
+                }
+
+                if ($relationship->relatedProperty && (int) $relationship->relatedProperty->platform_id !== (int) $this->platform->id) {
+                    continue;
+                }
+
+                $sourceKey = $relationship->mapping_key
+                    ?: ($relationship->property?->key ?: $relationship->property?->name);
+
+                if (! is_string($sourceKey) || trim($sourceKey) === '') {
+                    continue;
+                }
+
+                $value = data_get($payload, $sourceKey);
+                if ($value === null) {
+                    $value = data_get($payload, $targetKey);
+                }
+
+                if (! is_scalar($value) && $value !== null) {
+                    continue;
+                }
+
+                $properties[trim($targetKey)] = $value;
+            }
+        }
+
+        return $properties;
+    }
+
+    /**
+     * @return list<Event>
+     */
+    private function invoiceObjectMappingEvents(): array
+    {
+        $events = [];
+
+        $record = $this->record;
+        while ($record) {
+            $record->loadMissing('event', 'parent');
+            if ($record->event instanceof Event) {
+                $events[] = $record->event;
+            }
+
+            $record = $record->parent;
+        }
+
+        if ($this->event instanceof Event) {
+            $events[] = $this->event;
+        }
+
+        return array_values(array_unique($events, SORT_REGULAR));
+    }
+
+    private function isInvoiceObjectTechnicalPropertyKey(string $key): bool
+    {
+        return in_array(trim($key), [
+            'id',
+            'hs_object_id',
+            'hubspot_object_id',
+            'deal_id',
+            'hubspot_deal_id',
+            '_event_metadata',
+        ], true);
+    }
+
+    private function resolveInvoiceDealId(array $payload): ?string
+    {
+        return $this->firstScalar([
+            Arr::get($payload, 'deal_id'),
+            Arr::get($payload, 'hubspot_deal_id'),
+            Arr::get($payload, 'hs_object_id'),
+            Arr::get($payload, 'saleOrder.x_studio_deal_id'),
+            Arr::get($payload, 'saleOrder.x_studio_hubspot_deal_id'),
+            Arr::get($payload, 'sale_order.x_studio_deal_id'),
+            Arr::get($payload, 'invoice.x_studio_deal_id'),
+        ]);
+    }
+
     private function applyPlatformConfiguration(): void
     {
         $credentials = $this->platform->credentials ?? [];
@@ -995,6 +1816,185 @@ class HubspotService extends BaseService
         }
     }
 
+    private function tryLogQuoteSyncDealNote(string $objectType, string $quoteId, array $quotePayload, array $properties, array $response): array
+    {
+        if (! in_array(strtolower(trim($objectType)), ['quote', 'quotes'], true)) {
+            return [
+                'attempted' => false,
+                'reason' => 'object_type_not_quote',
+            ];
+        }
+
+        $dealId = $this->resolveHubspotDealIdFromQuotePayload($quotePayload, $quoteId);
+        if ($dealId === null) {
+            return [
+                'attempted' => false,
+                'reason' => 'deal_id_missing',
+                'quote_id' => $quoteId,
+            ];
+        }
+
+        $noteResponse = $this->hubspotApi->addNoteToObject(
+            'deals',
+            $dealId,
+            $this->buildQuoteSyncDealNote($quoteId, $quotePayload, $properties, $response),
+            [
+                'event_id' => $this->event?->id,
+                'record_id' => $this->record?->id,
+                'quote_id' => $quotePayload['quote_id'] ?? $quotePayload['hubspot_quote_id'] ?? $quoteId,
+                'operation' => $quotePayload['operation'] ?? null,
+            ]
+        );
+
+        return [
+            'attempted' => true,
+            'success' => (bool) ($noteResponse['success'] ?? false),
+            'deal_id' => $dealId,
+            'quote_id' => $quoteId,
+            'note_id' => $noteResponse['data']['id'] ?? null,
+            'status_code' => $noteResponse['status_code'] ?? null,
+            'error' => $noteResponse['error'] ?? null,
+        ];
+    }
+
+    private function tryLogArchivedQuoteCancellationDealNote(string $objectType, string $quoteId, array $quotePayload, array $properties, array $response): array
+    {
+        if (! in_array(strtolower(trim($objectType)), ['quote', 'quotes'], true)) {
+            return [
+                'attempted' => false,
+                'reason' => 'object_type_not_quote',
+            ];
+        }
+
+        $dealId = $this->resolveHubspotDealIdFromQuotePayload($quotePayload, $quoteId);
+        if ($dealId === null) {
+            return [
+                'attempted' => false,
+                'reason' => 'deal_id_missing',
+                'quote_id' => $quoteId,
+            ];
+        }
+
+        $noteResponse = $this->hubspotApi->addNoteToObject(
+            'deals',
+            $dealId,
+            $this->buildArchivedQuoteCancellationDealNote($quoteId, $quotePayload, $properties, $response),
+            [
+                'event_id' => $this->event?->id,
+                'record_id' => $this->record?->id,
+                'quote_id' => $quotePayload['quote_id'] ?? $quotePayload['hubspot_quote_id'] ?? $quoteId,
+                'operation' => $quotePayload['operation'] ?? 'cancelled',
+            ]
+        );
+
+        return [
+            'attempted' => true,
+            'success' => (bool) ($noteResponse['success'] ?? false),
+            'deal_id' => $dealId,
+            'quote_id' => $quoteId,
+            'note_id' => $noteResponse['data']['id'] ?? null,
+            'status_code' => $noteResponse['status_code'] ?? null,
+            'error' => $noteResponse['error'] ?? null,
+        ];
+    }
+
+    private function resolveHubspotDealIdFromQuotePayload(array $payload, string $quoteId): ?string
+    {
+        $dealId = $this->firstScalar([
+            Arr::get($payload, 'deal_id'),
+            Arr::get($payload, 'hubspot_deal_id'),
+            Arr::get($payload, 'source_quote.deal_id'),
+            Arr::get($payload, 'destination_response.data.source_quote.deal_id'),
+            Arr::get($payload, 'raw.deal_id'),
+            Arr::get($payload, 'raw.hubspot_deal_id'),
+            Arr::get($payload, 'raw.deal.id'),
+            Arr::get($payload, 'raw.associations.deals.0.id'),
+            Arr::get($payload, 'raw.associations.deals.results.0.id'),
+            Arr::get($payload, 'associations.deals.0.id'),
+            Arr::get($payload, 'associations.deals.results.0.id'),
+        ]);
+
+        if ($dealId !== null) {
+            return $dealId;
+        }
+
+        if (trim($quoteId) === '') {
+            return null;
+        }
+
+        $associationResponse = $this->hubspotApi->getObjectAssociations('quotes', $quoteId, 'deals');
+        if (! ($associationResponse['success'] ?? false)) {
+            return null;
+        }
+
+        return $this->firstScalar([
+            Arr::get($associationResponse, 'data.results.0.toObjectId'),
+            Arr::get($associationResponse, 'data.results.0.id'),
+        ]);
+    }
+
+    private function buildQuoteSyncDealNote(string $quoteId, array $quotePayload, array $properties, array $response): string
+    {
+        $success = (bool) ($response['success'] ?? false);
+        $status = $properties['sync_status_odoo'] ?? ($success ? 'success' : 'error');
+        $operation = $quotePayload['operation'] ?? null;
+        $odooId = $properties['odoo_id']
+            ?? Arr::get($quotePayload, 'destination_response.data.id')
+            ?? Arr::get($quotePayload, 'destination_response.data.external_id');
+        $error = $properties['last_error_odoo']
+            ?? $response['message']
+            ?? Arr::get($response, 'error.message')
+            ?? Arr::get($response, 'error.details.message');
+
+        $lines = [
+            $success
+                ? '[Integrador] Cotizacion sincronizada con Odoo'
+                : '[Integrador] Error al sincronizar cotizacion con Odoo',
+            'Cotizacion HubSpot: '.$quoteId,
+            'Folio/Cotizacion: '.(string) ($quotePayload['quote_id'] ?? $quotePayload['hubspot_quote_id'] ?? $quoteId),
+            'Estado: '.(string) $status,
+            $operation ? 'Operacion: '.(string) $operation : null,
+            $odooId ? 'Odoo ID: '.(string) $odooId : null,
+            (! $success && is_scalar($error) && trim((string) $error) !== '')
+                ? 'Error: '.mb_substr(trim((string) $error), 0, 500)
+                : null,
+            'Fecha: '.now()->toISOString(),
+        ];
+
+        return implode("\n", array_values(array_filter($lines)));
+    }
+
+    private function buildArchivedQuoteCancellationDealNote(string $quoteId, array $quotePayload, array $properties, array $response): string
+    {
+        $success = (bool) ($response['success'] ?? false);
+        $status = $properties['sync_status_odoo'] ?? ($success ? 'cancelled' : 'error');
+        $operation = $quotePayload['operation'] ?? 'cancelled';
+        $odooId = $properties['odoo_id']
+            ?? Arr::get($quotePayload, 'destination_response.data.id')
+            ?? Arr::get($quotePayload, 'destination_response.data.subscription_id');
+        $error = $properties['last_error_odoo']
+            ?? $response['message']
+            ?? Arr::get($response, 'error.message')
+            ?? Arr::get($response, 'error.details.message');
+
+        $lines = [
+            $success
+                ? '[Integrador] Suscripcion cancelada en Odoo'
+                : '[Integrador] Error al registrar cancelacion de suscripcion Odoo',
+            'Cotizacion HubSpot: '.$quoteId,
+            'Folio/Cotizacion: '.(string) ($quotePayload['quote_id'] ?? $quotePayload['hubspot_quote_id'] ?? $quoteId),
+            'Estado: '.(string) $status,
+            'Operacion: '.(string) $operation,
+            $odooId ? 'Suscripcion Odoo: '.(string) $odooId : null,
+            (! $success && is_scalar($error) && trim((string) $error) !== '')
+                ? 'Error: '.mb_substr(trim((string) $error), 0, 500)
+                : null,
+            'Fecha: '.now()->toISOString(),
+        ];
+
+        return implode("\n", array_values(array_filter($lines)));
+    }
+
     private function tryLogContactFailureNote(string $objectType, string $objectId, string $message, array $response): array
     {
         $normalizedType = strtolower(trim($objectType));
@@ -1017,9 +2017,9 @@ class HubspotService extends BaseService
             $objectId,
             $this->buildOperationalContactFailureNote($message, $response),
             [
-            'event_id' => $this->event?->id,
-            'record_id' => $this->record?->id,
-            'error_message' => $response['message'] ?? null,
+                'event_id' => $this->event?->id,
+                'record_id' => $this->record?->id,
+                'error_message' => $response['message'] ?? null,
             ]
         );
 
@@ -1242,14 +2242,14 @@ class HubspotService extends BaseService
 
         return trim(implode("\n", array_filter([
             '[Integrador] Error de sincronizacion de contacto',
-            'Operacion: ' . $this->resolveOperationalFailureLabel(),
-            'Evento: ' . ($this->event?->name ?: $this->event?->event_type_id ?: 'N/A'),
-            'Motivo: ' . trim($message),
-            $propertyName ? 'Propiedad: ' . $propertyName : null,
-            $errorCode ? 'Codigo: ' . $errorCode : null,
-            is_string($category) && trim($category) !== '' ? 'Categoria: ' . $category : null,
-            $this->record?->id ? 'Record: #' . $this->record->id : null,
-            'Fecha: ' . now()->toISOString(),
+            'Operacion: '.$this->resolveOperationalFailureLabel(),
+            'Evento: '.($this->event?->name ?: $this->event?->event_type_id ?: 'N/A'),
+            'Motivo: '.trim($message),
+            $propertyName ? 'Propiedad: '.$propertyName : null,
+            $errorCode ? 'Codigo: '.$errorCode : null,
+            is_string($category) && trim($category) !== '' ? 'Categoria: '.$category : null,
+            $this->record?->id ? 'Record: #'.$this->record->id : null,
+            'Fecha: '.now()->toISOString(),
         ])));
     }
 
@@ -1304,9 +2304,9 @@ class HubspotService extends BaseService
 
         return [
             $controlProperty => 'synced',
-            'sync_status_' . $targetPlatform => 'success',
-            'last_sync_' . $targetPlatform => now()->toISOString(),
-            'last_error_' . $targetPlatform => '',
+            'sync_status_'.$targetPlatform => 'success',
+            'last_sync_'.$targetPlatform => now()->toISOString(),
+            'last_error_'.$targetPlatform => '',
         ];
     }
 
@@ -1371,7 +2371,7 @@ class HubspotService extends BaseService
             return trim($candidate);
         }
 
-        return 'sync_to_' . $targetPlatform;
+        return 'sync_to_'.$targetPlatform;
     }
 
     private function resolveHubspotVersionSincPropertyKey(): ?string
