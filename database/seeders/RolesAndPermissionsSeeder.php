@@ -15,6 +15,7 @@ class RolesAndPermissionsSeeder extends Seeder
             'events.view',
             'events.manage',
             'records.view',
+            'records.manage',
             'platforms.manage',
             'properties.manage',
             'configs.manage',

@@ -22,16 +22,16 @@ defineProps({
             {{ node.name }}
         </div>
         <div class="mt-1 text-xs text-slate-500">
-            Platform: {{ node.platform_type ?? 'n/a' }}
+            Plataforma: {{ node.platform_type ?? 'n/d' }}
         </div>
         <div class="text-xs text-slate-500">
-            Type: {{ node.type ?? 'n/a' }}
+            Tipo: {{ node.type ?? 'n/d' }}
         </div>
         <div
             class="mt-2 text-xs font-semibold"
             :class="node.active ? 'text-emerald-600' : 'text-rose-600'"
         >
-            {{ node.active ? 'Active' : 'Inactive' }}
+            {{ node.active ? 'Activo' : 'Inactivo' }}
         </div>
     </div>
 </template>

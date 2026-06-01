@@ -14,15 +14,15 @@ const user = computed(() => page.props.auth?.user ?? null);
 const currentUrl = computed(() => page.url ?? '');
 
 const links = [
-    { href: '/dashboard', label: 'Dashboard', icon: 'M4 13h6V4H4v9zM14 20h6V4h-6v16zM4 20h6v-3H4v3z' },
-    { href: '/admin/events', label: 'Events', icon: 'M5 7h14M5 12h14M5 17h14' },
-    { href: '/admin/platforms', label: 'Platforms', icon: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9' },
-    { href: '/admin/properties', label: 'Properties', icon: 'M4 7h16M4 12h10M4 17h16' },
-    { href: '/admin/records', label: 'Records', icon: 'M6 3h12v18H6zM9 7h6M9 11h6M9 15h4' },
-    { href: '/admin/users', label: 'Users', icon: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
+    { href: '/dashboard', label: 'Panel', icon: 'M4 13h6V4H4v9zM14 20h6V4h-6v16zM4 20h6v-3H4v3z' },
+    { href: '/admin/events', label: 'Eventos', icon: 'M5 7h14M5 12h14M5 17h14' },
+    { href: '/admin/platforms', label: 'Plataformas', icon: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9' },
+    { href: '/admin/properties', label: 'Propiedades', icon: 'M4 7h16M4 12h10M4 17h16' },
+    { href: '/admin/records', label: 'Registros', icon: 'M6 3h12v18H6zM9 7h6M9 11h6M9 15h4' },
+    { href: '/admin/users', label: 'Usuarios', icon: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' },
     { href: '/admin/roles', label: 'Roles', icon: 'M12 2l7 4v6c0 5-3 8-7 10-4-2-7-5-7-10V6l7-4zM9 12l2 2 4-5' },
-    { href: '/admin/categories', label: 'Categories', icon: 'M4 5h7v7H4zM13 5h7v7h-7zM4 14h7v5H4zM13 14h7v5h-7z' },
-    { href: '/admin/configs', label: 'Configs', icon: 'M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5zM19.4 15a1.8 1.8 0 0 0 .36 2l.04.04-2 3.46-.06-.02a1.8 1.8 0 0 0-1.96.44l-.04.04-3.48-2 .02-.06a1.8 1.8 0 0 0-.72-1.9H11.5a1.8 1.8 0 0 0-2 .36l-.04.04-3.46-2 .02-.06A1.8 1.8 0 0 0 5.6 13H5.5V9h.1a1.8 1.8 0 0 0 1.62-2.34l-.02-.06 3.46-2 .04.04A1.8 1.8 0 0 0 12.7 5h.06a1.8 1.8 0 0 0 1.96-.44l.04-.04 3.48 2-.02.06A1.8 1.8 0 0 0 18.94 8H19v4h-.1a1.8 1.8 0 0 0-1.5 3z' },
+    { href: '/admin/categories', label: 'Categorías', icon: 'M4 5h7v7H4zM13 5h7v7h-7zM4 14h7v5H4zM13 14h7v5h-7z' },
+    { href: '/admin/configs', label: 'Configuración', icon: 'M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5zM19.4 15a1.8 1.8 0 0 0 .36 2l.04.04-2 3.46-.06-.02a1.8 1.8 0 0 0-1.96.44l-.04.04-3.48-2 .02-.06a1.8 1.8 0 0 0-.72-1.9H11.5a1.8 1.8 0 0 0-2 .36l-.04.04-3.46-2 .02-.06A1.8 1.8 0 0 0 5.6 13H5.5V9h.1a1.8 1.8 0 0 0 1.62-2.34l-.02-.06 3.46-2 .04.04A1.8 1.8 0 0 0 12.7 5h.06a1.8 1.8 0 0 0 1.96-.44l.04-.04 3.48 2-.02.06A1.8 1.8 0 0 0 18.94 8H19v4h-.1a1.8 1.8 0 0 0-1.5 3z' },
 ];
 
 const logout = () => router.post('/logout');
@@ -33,8 +33,8 @@ const isActive = (href) => currentUrl.value === href || currentUrl.value.startsW
     <div class="shell">
         <aside class="sidebar">
             <div class="brand">
-                <p>Integrator</p>
-                <strong>Admin Panel</strong>
+                <p>Integrador</p>
+                <strong>Panel Admin</strong>
             </div>
 
             <nav class="nav">

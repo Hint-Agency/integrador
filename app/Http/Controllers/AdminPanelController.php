@@ -565,20 +565,17 @@ class AdminPanelController extends Controller
         $status = $request->string('status')->toString();
         $eventType = $request->string('event_type')->toString();
 
-        $query = Record::query()
-            ->with(['event:id,name,event_type_id'])
-            ->withCount('childrens')
-            ->orderByDesc('id');
+        $applyRecordFilters = static function ($query) use ($status, $eventType): void {
+            if ($status !== '') {
+                $query->where('status', $status);
+            }
 
-        if ($status !== '') {
-            $query->where('status', $status);
-        }
+            if ($eventType !== '') {
+                $query->where('event_type', $eventType);
+            }
+        };
 
-        if ($eventType !== '') {
-            $query->where('event_type', $eventType);
-        }
-
-        $records = $query->paginate(25)->withQueryString()->through(static function (Record $record): array {
+        $childRecordToArray = static function (Record $record): array {
             return [
                 'id' => $record->id,
                 'event_id' => $record->event_id,
@@ -596,6 +593,50 @@ class AdminPanelController extends Controller
                     'event_type_id' => $record->event->event_type_id,
                 ] : null,
             ];
+        };
+
+        $query = Record::query()
+            ->whereDoesntHave('parent')
+            ->with([
+                'event:id,name,event_type_id',
+                'childrens' => static function ($query): void {
+                    $query->with(['event:id,name,event_type_id'])
+                        ->withCount('childrens')
+                        ->orderBy('id');
+                },
+            ])
+            ->withCount('childrens')
+            ->orderByDesc('id');
+
+        if ($status !== '' || $eventType !== '') {
+            $query->where(static function ($query) use ($applyRecordFilters): void {
+                $query->where(static function ($query) use ($applyRecordFilters): void {
+                    $applyRecordFilters($query);
+                })->orWhereHas('childrens', static function ($query) use ($applyRecordFilters): void {
+                    $applyRecordFilters($query);
+                });
+            });
+        }
+
+        $records = $query->paginate(25)->withQueryString()->through(static function (Record $record) use ($childRecordToArray): array {
+            return [
+                'id' => $record->id,
+                'event_id' => $record->event_id,
+                'record_id' => $record->record_id,
+                'event_type' => $record->event_type,
+                'status' => $record->status,
+                'message' => $record->message,
+                'details' => $record->details,
+                'payload' => $record->payload,
+                'children_count' => $record->childrens_count,
+                'created_at' => optional($record->created_at)?->toISOString(),
+                'event' => $record->event ? [
+                    'id' => $record->event->id,
+                    'name' => $record->event->name,
+                    'event_type_id' => $record->event->event_type_id,
+                ] : null,
+                'children' => $record->childrens->map($childRecordToArray)->values(),
+            ];
         });
 
         $eventTypes = Record::query()
@@ -603,6 +644,13 @@ class AdminPanelController extends Controller
             ->distinct()
             ->orderBy('event_type')
             ->pluck('event_type');
+
+        $cleanupStats = [
+            'total' => Record::query()->count(),
+            'older_than_7_days' => Record::query()->where('created_at', '<', now()->subDays(7))->count(),
+            'older_than_30_days' => Record::query()->where('created_at', '<', now()->subDays(30))->count(),
+            'older_than_90_days' => Record::query()->where('created_at', '<', now()->subDays(90))->count(),
+        ];
 
         return inertia('Admin/Records', [
             'records' => $records,
@@ -612,6 +660,8 @@ class AdminPanelController extends Controller
             ],
             'event_types' => $eventTypes,
             'status_options' => ['init', 'processing', 'success', 'warning', 'error'],
+            'cleanup_stats' => $cleanupStats,
+            'can_manage_records' => $request->user()?->hasPermission('records.manage') ?? false,
         ]);
     }
 

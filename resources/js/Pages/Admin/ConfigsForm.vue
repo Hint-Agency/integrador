@@ -52,29 +52,29 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout title="Configs">
-        <LightboxFormModal :title="isEdit ? `Edit config #${props.config?.id}` : 'Create config'" close-href="/admin/configs">
+    <AdminLayout title="Configuración">
+        <LightboxFormModal :title="isEdit ? `Editar configuración #${props.config?.id}` : 'Crear configuración'" close-href="/admin/configs">
             <form class="lightbox-form" @submit.prevent="submit">
                 <div class="lightbox-grid">
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Config Key</span>
-                        <input v-model="form.key" class="lightbox-input" type="text" placeholder="Config Key" required>
+                        <span class="lightbox-label">Clave de configuración</span>
+                        <input v-model="form.key" class="lightbox-input" type="text" placeholder="Clave de configuración" required>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Description</span>
-                        <input v-model="form.description" class="lightbox-input" type="text" placeholder="Description">
+                        <span class="lightbox-label">Descripción</span>
+                        <input v-model="form.description" class="lightbox-input" type="text" placeholder="Descripción">
                     </label>
                 </div>
 
                 <label class="lightbox-field">
-                    <span class="lightbox-label">Value JSON</span>
+                    <span class="lightbox-label">Valor JSON</span>
                     <textarea v-model="form.value_text" class="lightbox-textarea" rows="8" placeholder='{"key":"value"}' />
                 </label>
-                <label class="lightbox-check-inline"><input v-model="form.is_encrypted" type="checkbox"> Encrypted value</label>
+                <label class="lightbox-check-inline"><input v-model="form.is_encrypted" type="checkbox"> Valor cifrado</label>
 
                 <div class="lightbox-actions">
-                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Save changes' : 'Create config' }}</button>
-                    <Link class="lightbox-link" href="/admin/configs">Cancel</Link>
+                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Guardar cambios' : 'Crear configuración' }}</button>
+                    <Link class="lightbox-link" href="/admin/configs">Cancelar</Link>
                 </div>
             </form>
         </LightboxFormModal>

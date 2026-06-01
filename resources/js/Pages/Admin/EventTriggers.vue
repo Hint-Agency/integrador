@@ -14,7 +14,7 @@ const normalizeGroups = () => {
     if (sourceGroups.length === 0) {
         return [{
             id: null,
-            name: 'Default Group',
+            name: 'Grupo default',
             operator: 'and',
             active: true,
             conditions: [{
@@ -47,7 +47,7 @@ const form = useForm({
 const addGroup = () => {
     form.groups.push({
         id: null,
-        name: `Group ${form.groups.length + 1}`,
+        name: `Grupo ${form.groups.length + 1}`,
         operator: 'and',
         active: true,
         conditions: [{
@@ -115,12 +115,12 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout :title="`Triggers · ${event.name}`">
+    <AdminLayout :title="`Disparadores · ${event.name}`">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 
         <div class="toolbar">
-            <Link class="secondary" href="/admin/events">Volver a events</Link>
+            <Link class="secondary" href="/admin/events">Volver a eventos</Link>
             <button type="button" class="primary" @click="addGroup">Agregar grupo</button>
         </div>
 
@@ -128,10 +128,10 @@ const submit = () => {
             <div class="groups">
                 <article v-for="(group, groupIndex) in form.groups" :key="`group-${groupIndex}`" class="group">
                     <header class="group-head">
-                        <input v-model="group.name" type="text" placeholder="Group name" required>
+                        <input v-model="group.name" type="text" placeholder="Nombre del grupo" required>
                         <select v-model="group.operator">
-                            <option value="and">and</option>
-                            <option value="or">or</option>
+                            <option value="and">y</option>
+                            <option value="or">o</option>
                         </select>
                         <label class="check">
                             <input v-model="group.active" type="checkbox">
@@ -146,13 +146,13 @@ const submit = () => {
                             :key="`condition-${groupIndex}-${conditionIndex}`"
                             class="condition"
                         >
-                            <input v-model="condition.field" type="text" placeholder="field (ej. payload.amount)" required>
+                            <input v-model="condition.field" type="text" placeholder="campo (ej. payload.amount)" required>
                             <select v-model="condition.operator">
                                 <option v-for="operator in props.supported_operators" :key="operator" :value="operator">
                                     {{ operator }}
                                 </option>
                             </select>
-                            <input v-model="condition.value_text" type="text" placeholder='value (ej. "100" o {"a":1})'>
+                            <input v-model="condition.value_text" type="text" placeholder='valor (ej. "100" o {"a":1})'>
                             <button type="button" class="danger compact" @click="removeCondition(groupIndex, conditionIndex)">Quitar</button>
                         </div>
                     </div>
@@ -162,7 +162,7 @@ const submit = () => {
             </div>
 
             <div class="actions">
-                <button type="submit" class="primary save" :disabled="form.processing">Guardar triggers</button>
+                <button type="submit" class="primary save" :disabled="form.processing">Guardar disparadores</button>
             </div>
         </form>
     </AdminLayout>

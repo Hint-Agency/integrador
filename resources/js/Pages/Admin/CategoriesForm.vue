@@ -96,28 +96,28 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout title="Categories">
-        <LightboxFormModal :title="isEdit ? `Edit category #${props.category?.id}` : 'Create category'" close-href="/admin/categories">
+    <AdminLayout title="Categorías">
+        <LightboxFormModal :title="isEdit ? `Editar categoría #${props.category?.id}` : 'Crear categoría'" close-href="/admin/categories">
             <form class="lightbox-form" @submit.prevent="submit">
                 <div class="lightbox-grid">
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Name</span>
-                        <input v-model="form.name" class="lightbox-input" type="text" placeholder="Category Name" required>
+                        <span class="lightbox-label">Nombre</span>
+                        <input v-model="form.name" class="lightbox-input" type="text" placeholder="Nombre de la categoría" required>
                     </label>
                     <label class="lightbox-field">
                         <span class="lightbox-label">Slug</span>
                         <input v-model="form.slug" class="lightbox-input" type="text" placeholder="Category Slug">
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Description</span>
-                        <input v-model="form.description" class="lightbox-input" type="text" placeholder="Description">
+                        <span class="lightbox-label">Descripción</span>
+                        <input v-model="form.description" class="lightbox-input" type="text" placeholder="Descripción">
                     </label>
                 </div>
 
                 <div class="lightbox-block property-picker">
                     <div class="property-picker-head">
                         <div>
-                            <p class="lightbox-block-title">Properties</p>
+                            <p class="lightbox-block-title">Propiedades</p>
                             <p class="property-help">Agrega propiedades usando búsqueda por nombre/key o filtrando por plataforma.</p>
                         </div>
                         <span class="selected-count">{{ form.property_ids.length }} seleccionadas</span>
@@ -218,11 +218,11 @@ const submit = () => {
                     </div>
                 </div>
 
-                <label class="lightbox-check-inline"><input v-model="form.active" type="checkbox"> Active</label>
+                <label class="lightbox-check-inline"><input v-model="form.active" type="checkbox"> Activa</label>
 
                 <div class="lightbox-actions">
-                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Save changes' : 'Create category' }}</button>
-                    <Link class="lightbox-link" href="/admin/categories">Cancel</Link>
+                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Guardar cambios' : 'Crear categoría' }}</button>
+                    <Link class="lightbox-link" href="/admin/categories">Cancelar</Link>
                 </div>
             </form>
         </LightboxFormModal>

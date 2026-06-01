@@ -2,7 +2,7 @@
 import AdminLayout from '@/Layouts/AdminLayout.vue';
 import IconAction from '@/Components/IconAction.vue';
 import PaginationNav from '@/Components/PaginationNav.vue';
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Link, router } from '@inertiajs/vue3';
 
 const props = defineProps({
@@ -15,13 +15,14 @@ const pipelineRows = computed(() => (props.events.data ?? []).map((event) => ({
     next: event.to_event?.name ?? 'FIN',
     platform: event.platform?.name ?? 'n/a',
 })));
+const showPipeline = ref(false);
 
 const remove = (id) => router.delete(`/admin/events/${id}`, { preserveScroll: true });
 const executeNow = (id) => router.post(`/admin/events/${id}/execute-now`, {}, { preserveScroll: true });
 </script>
 
 <template>
-    <AdminLayout title="Events">
+    <AdminLayout title="Eventos">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 
@@ -30,8 +31,16 @@ const executeNow = (id) => router.post(`/admin/events/${id}/execute-now`, {}, { 
         </div>
 
         <div class="flow-map">
-            <h2>Relaciones de eventos (pipeline)</h2>
-            <div class="flow-lines">
+            <button
+                type="button"
+                class="flow-toggle"
+                :aria-expanded="showPipeline"
+                @click="showPipeline = !showPipeline"
+            >
+                <span>Relaciones de eventos (pipeline)</span>
+                <strong>{{ showPipeline ? 'Ocultar' : 'Mostrar' }}</strong>
+            </button>
+            <div v-if="showPipeline" class="flow-lines">
                 <div v-for="row in pipelineRows" :key="`flow-${row.id}`" class="flow-line">
                     <span class="badge">{{ row.platform }}</span>
                     <strong>{{ row.name }}</strong>
@@ -53,7 +62,7 @@ const executeNow = (id) => router.post(`/admin/events/${id}/execute-now`, {}, { 
                         <th>ID</th>
                         <th>Nombre</th>
                         <th>Tipo</th>
-                        <th>Event Type</th>
+                        <th>Tipo de evento</th>
                         <th>Plataforma</th>
                         <th>Siguiente</th>
                         <th>Activo</th>
@@ -71,8 +80,8 @@ const executeNow = (id) => router.post(`/admin/events/${id}/execute-now`, {}, { 
                         <td>{{ event.active ? 'Sí' : 'No' }}</td>
                         <td class="actions-cell">
                             <IconAction as="link" icon="flow" label="Ver flujo" :href="`/events/${event.id}`" />
-                            <IconAction as="link" icon="trigger" label="Configurar triggers" :href="`/admin/events/${event.id}/triggers`" />
-                            <IconAction as="link" icon="mapping" label="Editar mappings" :href="`/admin/events/${event.id}/relationships`" />
+                            <IconAction as="link" icon="trigger" label="Configurar disparadores" :href="`/admin/events/${event.id}/triggers`" />
+                            <IconAction as="link" icon="mapping" label="Editar mapeos" :href="`/admin/events/${event.id}/relationships`" />
                             <IconAction as="link" icon="edit" label="Editar evento" :href="`/admin/events/${event.id}/edit`" />
                             <IconAction
                                 v-if="event.type === 'schedule'"
@@ -100,8 +109,11 @@ th,td{border-bottom:1px solid #e2e8f0;padding:10px 8px;text-align:left;font-size
 th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#475569}
 .actions-cell{white-space:nowrap}
 .flow-map{border:1px solid #dbe4ef;border-radius:12px;background:#fff;padding:12px;margin-bottom:12px}
-.flow-map h2{margin:0 0 10px;font-size:16px}
+.flow-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;border:0;background:transparent;color:#0f172a;padding:0;cursor:pointer;text-align:left}
+.flow-toggle span{font-size:16px;font-weight:700}
+.flow-toggle strong{border:1px solid #cbd5e1;border-radius:999px;background:#f8fafc;color:#334155;font-size:12px;padding:5px 9px}
 .flow-lines{display:grid;gap:8px}
+.flow-toggle + .flow-lines{margin-top:10px}
 .flow-line{display:flex;align-items:center;gap:8px;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;background:#f8fafc}
 .badge{font-size:10px;border:1px solid #cbd5e1;border-radius:999px;padding:2px 6px;color:#334155;background:#fff}
 .arrow{color:#64748b}

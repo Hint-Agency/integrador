@@ -18,14 +18,14 @@ class WebhookController extends Controller
         if (! $platformModel) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Webhook not received, platform not found.',
+                'message' => 'Webhook no recibido: no se encontró la plataforma.',
             ], 400);
         }
 
         if (! $platformModel->secret_key || ! $platformModel->signature) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Webhook not received, missing secret key or signature configuration.',
+                'message' => 'Webhook no recibido: falta la llave secreta o la configuración de firma.',
             ], 400);
         }
 
@@ -47,13 +47,13 @@ class WebhookController extends Controller
         } catch (InvalidWebhookSignature) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Webhook not received, invalid signature.',
+                'message' => 'Webhook no recibido: firma inválida.',
             ], 401);
         }
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Webhook received',
+            'message' => 'Webhook recibido.',
         ], 200);
     }
 }

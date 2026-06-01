@@ -24,19 +24,19 @@ const blankForm = () => ({
 
 const form = useForm(blankForm());
 
-const sourcePlatformLabel = computed(() => props.mapping_context.source_label ?? props.event.platform?.name ?? 'Incoming payload');
-const targetPlatformLabel = computed(() => props.mapping_context.target_label ?? props.event.platform?.name ?? 'Mapping target');
+const sourcePlatformLabel = computed(() => props.mapping_context.source_label ?? props.event.platform?.name ?? 'Payload entrante');
+const targetPlatformLabel = computed(() => props.mapping_context.target_label ?? props.event.platform?.name ?? 'Destino del mapeo');
 const nextPlatformLabel = computed(() => props.mapping_context.next_label ?? props.event.to_event?.platform?.name ?? null);
 const mappingModeLabel = computed(() => {
     if (props.mapping_context.has_upstream && props.event.to_event) {
-        return 'Incoming payload → current event payload; next event is flow continuity.';
+        return 'Payload entrante → payload del evento actual; el siguiente evento solo da continuidad al flujo.';
     }
 
     if (props.event.to_event) {
-        return 'Current event payload → next event payload.';
+        return 'Payload del evento actual → payload del siguiente evento.';
     }
 
-    return 'Current event payload → current platform payload.';
+    return 'Payload del evento actual → payload de la plataforma actual.';
 });
 const hasRelationships = computed(() => (props.relationships ?? []).length > 0);
 
@@ -106,42 +106,42 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout :title="`Property Relationships · ${props.event.name}`">
+    <AdminLayout :title="`Mapeo de propiedades · ${props.event.name}`">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 
         <div class="toolbar">
             <div>
-                <h1>Property Relationships</h1>
+                <h1>Mapeo de propiedades</h1>
                 <p>
-                    Source event: <strong>{{ props.event.name }}</strong>
+                    Evento origen: <strong>{{ props.event.name }}</strong>
                     <span class="muted">({{ props.event.event_type_label ?? props.event.event_type_id }})</span>
                 </p>
             </div>
             <div class="toolbar-actions">
-                <Link class="secondary" href="/admin/events">Back to events</Link>
-                <button type="button" class="primary" @click="startCreate">New mapping</button>
+                <Link class="secondary" href="/admin/events">Volver a eventos</Link>
+                <button type="button" class="primary" @click="startCreate">Nuevo mapeo</button>
             </div>
         </div>
 
         <div class="summary-cards">
             <article class="summary-card">
-                <span class="eyebrow">Incoming Payload / Source</span>
+                <span class="eyebrow">Payload entrante / origen</span>
                 <strong>{{ sourcePlatformLabel }}</strong>
-                <p>{{ props.source_properties.length }} active source properties available</p>
+                <p>{{ props.source_properties.length }} propiedades origen activas disponibles</p>
             </article>
             <article class="summary-card">
-                <span class="eyebrow">Mapping Target</span>
+                <span class="eyebrow">Destino del mapeo</span>
                 <strong>{{ targetPlatformLabel }}</strong>
-                <p>{{ props.target_properties.length }} active target properties available</p>
+                <p>{{ props.target_properties.length }} propiedades destino activas disponibles</p>
             </article>
             <article class="summary-card">
-                <span class="eyebrow">Next Event</span>
-                <strong>{{ props.event.to_event?.name ?? 'No next event' }}</strong>
-                <p>{{ nextPlatformLabel ? `${nextPlatformLabel} · informational continuity` : 'No write-back or downstream step configured' }}</p>
+                <span class="eyebrow">Siguiente evento</span>
+                <strong>{{ props.event.to_event?.name ?? 'Sin siguiente evento' }}</strong>
+                <p>{{ nextPlatformLabel ? `${nextPlatformLabel} · continuidad informativa` : 'Sin write-back o paso posterior configurado' }}</p>
             </article>
             <article class="summary-card">
-                <span class="eyebrow">Configured Mappings</span>
+                <span class="eyebrow">Mapeos configurados</span>
                 <strong>{{ props.relationships.length }}</strong>
                 <p>{{ mappingModeLabel }}</p>
             </article>
@@ -151,24 +151,24 @@ const submit = () => {
             <section class="panel">
                 <header class="panel-head">
                     <div>
-                        <h2>Current Mappings</h2>
-                        <p>These mappings read from the incoming payload and build the payload consumed by this event.</p>
+                        <h2>Mapeos actuales</h2>
+                        <p>Estos mapeos leen el payload entrante y construyen el payload consumido por este evento.</p>
                     </div>
                 </header>
 
                 <div v-if="!hasRelationships" class="empty-state">
-                    No property mappings configured yet for this event.
+                    Este evento todavía no tiene mapeos de propiedades configurados.
                 </div>
 
                 <div v-else class="table-wrap">
                     <table>
                         <thead>
                             <tr>
-                                <th>Source</th>
-                                <th>Target</th>
-                                <th>Mapping Key</th>
-                                <th>Status</th>
-                                <th>Actions</th>
+                                <th>Origen</th>
+                                <th>Destino</th>
+                                <th>Clave de mapeo</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -184,12 +184,12 @@ const submit = () => {
                                 <td>{{ relationship.mapping_key || relationship.property?.key || 'auto' }}</td>
                                 <td>
                                     <span :class="relationship.active ? 'status active' : 'status inactive'">
-                                        {{ relationship.active ? 'Active' : 'Inactive' }}
+                                        {{ relationship.active ? 'Activo' : 'Inactivo' }}
                                     </span>
                                 </td>
                                 <td class="actions">
-                                    <IconAction icon="edit" label="Editar mapping" @click="startEdit(relationship)" />
-                                    <IconAction icon="delete" label="Eliminar mapping" variant="danger" @click="removeRelationship(relationship.id)" />
+                                    <IconAction icon="edit" label="Editar mapeo" @click="startEdit(relationship)" />
+                                    <IconAction icon="delete" label="Eliminar mapeo" variant="danger" @click="removeRelationship(relationship.id)" />
                                 </td>
                             </tr>
                         </tbody>
@@ -200,16 +200,16 @@ const submit = () => {
             <section class="panel editor">
                 <header class="panel-head">
                     <div>
-                        <h2>{{ editingRelationshipId ? 'Edit Mapping' : 'Create Mapping' }}</h2>
-                        <p>Choose incoming and target properties. Use `mapping_key` when the payload path differs from the source property key.</p>
+                        <h2>{{ editingRelationshipId ? 'Editar mapeo' : 'Crear mapeo' }}</h2>
+                        <p>Elige propiedades de entrada y destino. Usa `mapping_key` cuando la ruta del payload sea distinta de la clave origen.</p>
                     </div>
                 </header>
 
                 <form class="editor-form" @submit.prevent="submit">
                     <label class="field">
-                        <span>Incoming Payload Property</span>
+                        <span>Propiedad del payload entrante</span>
                         <select v-model="form.property_id" required>
-                            <option value="" disabled>Select incoming property</option>
+                            <option value="" disabled>Selecciona propiedad entrante</option>
                             <option v-for="property in props.source_properties" :key="property.id" :value="property.id">
                                 {{ property.name }} ({{ property.key }})
                             </option>
@@ -217,9 +217,9 @@ const submit = () => {
                     </label>
 
                     <label class="field">
-                        <span>Mapping Target Property</span>
+                        <span>Propiedad destino</span>
                         <select v-model="form.related_property_id" required>
-                            <option value="" disabled>Select target property</option>
+                            <option value="" disabled>Selecciona propiedad destino</option>
                             <option v-for="property in props.target_properties" :key="property.id" :value="property.id">
                                 {{ property.name }} ({{ property.key }})
                             </option>
@@ -227,27 +227,27 @@ const submit = () => {
                     </label>
 
                     <label class="field">
-                        <span>Mapping Key</span>
+                        <span>Clave de mapeo</span>
                         <input v-model="form.mapping_key" type="text" placeholder="raw.associations.deals.0.owner.email">
-                        <small>Optional. If empty, the source property key is used. Supports enriched payload paths like hs_terms, raw.properties.hs_terms, raw.associations.deals.0.owner.email, or entity_results.company.target_id.</small>
+                        <small>Opcional. Si está vacío, se usa la clave de la propiedad origen. Soporta rutas enriquecidas como hs_terms, raw.properties.hs_terms, raw.associations.deals.0.owner.email o entity_results.company.target_id.</small>
                     </label>
 
                     <label class="field">
                         <span>Meta JSON</span>
                         <textarea v-model="form.meta_text" rows="5" placeholder='{"transform":"decimal"}' />
-                        <small>Optional. Reserve for transformation hints or mapping metadata.</small>
+                        <small>Opcional. Úsalo para hints de transformación o metadata del mapeo.</small>
                     </label>
 
                     <label class="check">
                         <input v-model="form.active" type="checkbox">
-                        Active mapping
+                        Mapeo activo
                     </label>
 
                     <div class="form-actions">
                         <button type="submit" class="primary" :disabled="form.processing">
-                            {{ editingRelationshipId ? 'Save mapping' : 'Create mapping' }}
+                            {{ editingRelationshipId ? 'Guardar mapeo' : 'Crear mapeo' }}
                         </button>
-                        <button type="button" class="secondary" @click="startCreate">Reset</button>
+                        <button type="button" class="secondary" @click="startCreate">Limpiar</button>
                     </div>
                 </form>
             </section>

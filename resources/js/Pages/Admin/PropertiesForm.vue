@@ -57,27 +57,27 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout title="Properties">
-        <LightboxFormModal :title="isEdit ? `Edit property #${props.property?.id}` : 'Create property'" close-href="/admin/properties">
+    <AdminLayout title="Propiedades">
+        <LightboxFormModal :title="isEdit ? `Editar propiedad #${props.property?.id}` : 'Crear propiedad'" close-href="/admin/properties">
             <form class="lightbox-form" @submit.prevent="submit">
                 <div class="lightbox-grid">
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Platform</span>
+                        <span class="lightbox-label">Plataforma</span>
                         <select v-model="form.platform_id" class="lightbox-select" required>
-                            <option value="" disabled>Platform</option>
+                            <option value="" disabled>Selecciona plataforma</option>
                             <option v-for="platform in props.platforms" :key="platform.id" :value="platform.id">{{ platform.name }} ({{ platform.type }})</option>
                         </select>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Name</span>
-                        <input v-model="form.name" class="lightbox-input" type="text" placeholder="Property Name" required>
+                        <span class="lightbox-label">Nombre</span>
+                        <input v-model="form.name" class="lightbox-input" type="text" placeholder="Nombre de la propiedad" required>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Key</span>
-                        <input v-model="form.key" class="lightbox-input" type="text" placeholder="Property Key" required>
+                        <span class="lightbox-label">Clave</span>
+                        <input v-model="form.key" class="lightbox-input" type="text" placeholder="Clave de la propiedad" required>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Type</span>
+                        <span class="lightbox-label">Tipo</span>
                         <select v-model="form.type" class="lightbox-select" required>
                             <option value="string">string</option>
                             <option value="integer">integer</option>
@@ -96,13 +96,13 @@ const submit = () => {
                 </div>
 
                 <div class="toggles">
-                    <label class="lightbox-check-inline"><input v-model="form.required" type="checkbox"> Required</label>
-                    <label class="lightbox-check-inline"><input v-model="form.active" type="checkbox"> Active</label>
+                    <label class="lightbox-check-inline"><input v-model="form.required" type="checkbox"> Requerida</label>
+                    <label class="lightbox-check-inline"><input v-model="form.active" type="checkbox"> Activa</label>
                 </div>
 
                 <div class="lightbox-actions">
-                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Save changes' : 'Create property' }}</button>
-                    <Link class="lightbox-link" href="/admin/properties">Cancel</Link>
+                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Guardar cambios' : 'Crear propiedad' }}</button>
+                    <Link class="lightbox-link" href="/admin/properties">Cancelar</Link>
                 </div>
             </form>
         </LightboxFormModal>

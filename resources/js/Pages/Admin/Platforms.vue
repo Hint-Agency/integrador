@@ -13,7 +13,7 @@ const testConnection = (id) => router.post(`/admin/platforms/${id}/test-connecti
 </script>
 
 <template>
-    <AdminLayout title="Platforms">
+    <AdminLayout title="Plataformas">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 
@@ -31,11 +31,11 @@ const testConnection = (id) => router.post(`/admin/platforms/${id}/test-connecti
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Name</th>
+                        <th>Nombre</th>
                         <th>Slug</th>
-                        <th>Type</th>
+                        <th>Tipo</th>
                         <th>Activa</th>
-                        <th>Signature</th>
+                        <th>Firma</th>
                         <th>Acciones</th>
                     </tr>
                 </thead>

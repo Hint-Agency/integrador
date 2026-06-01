@@ -141,10 +141,10 @@ const payloadMappingPlaceholder = `{
 const metaPlaceholder = `{
   "object_type": "deal",
   "source": "hubspot",
-  "notes": "Optional execution metadata"
+  "notes": "Metadata opcional de ejecución"
 }`;
 
-const genericConfigHelp = 'Disponible solo para plataformas generic. Define HTTP, auth, retries e idempotencia del request saliente.';
+const genericConfigHelp = 'Disponible solo para plataformas genéricas. Define HTTP, autenticación, reintentos e idempotencia del request saliente.';
 
 const safeParse = (raw, fallback = {}) => {
     try {
@@ -266,39 +266,39 @@ watch(isGenericPlatform, (value) => {
 </script>
 
 <template>
-    <AdminLayout title="Events">
-        <LightboxFormModal :title="isEdit ? `Edit event #${props.event?.id}` : 'Create event'" close-href="/admin/events">
+    <AdminLayout title="Eventos">
+        <LightboxFormModal :title="isEdit ? `Editar evento #${props.event?.id}` : 'Crear evento'" close-href="/admin/events">
             <form class="lightbox-form" @submit.prevent="submit">
                 <div class="lightbox-grid">
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Platform</span>
+                        <span class="lightbox-label">Plataforma</span>
                         <select v-model="form.platform_id" class="lightbox-select" required>
-                            <option value="" disabled>Platform</option>
+                            <option value="" disabled>Selecciona una plataforma</option>
                             <option v-for="platform in props.platforms" :key="platform.id" :value="platform.id">{{ platform.name }} ({{ platform.type }})</option>
                         </select>
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Next Event</span>
+                        <span class="lightbox-label">Siguiente evento</span>
                         <select v-model="form.to_event_id" class="lightbox-select">
-                            <option value="">No next event</option>
+                            <option value="">Sin siguiente evento</option>
                             <option v-for="option in props.event_options" :key="option.id" :value="option.id">{{ option.name }}</option>
                         </select>
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Name</span>
-                        <input v-model="form.name" class="lightbox-input" type="text" placeholder="Event Name" required>
+                        <span class="lightbox-label">Nombre</span>
+                        <input v-model="form.name" class="lightbox-input" type="text" placeholder="Nombre del evento" required>
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Suggested Event Type</span>
+                        <span class="lightbox-label">Tipo de evento sugerido</span>
                         <select
                             class="lightbox-select"
                             :value="hasSuggestedEventType ? form.event_type_id : ''"
                             @change="form.event_type_id = $event.target.value || form.event_type_id"
                         >
-                            <option value="">Suggested event type</option>
+                            <option value="">Tipo de evento sugerido</option>
                             <optgroup
                                 v-for="group in filteredEventTypeGroups"
                                 :key="group.label"
@@ -316,7 +316,7 @@ watch(isGenericPlatform, (value) => {
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Execution Type</span>
+                        <span class="lightbox-label">Tipo de ejecución</span>
                         <select v-model="form.type" class="lightbox-select" required>
                             <option value="webhook">webhook</option>
                             <option value="schedule">schedule</option>
@@ -324,20 +324,20 @@ watch(isGenericPlatform, (value) => {
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Event Type ID</span>
+                        <span class="lightbox-label">ID del tipo de evento</span>
                         <input v-model="form.event_type_id" class="lightbox-input" type="text" placeholder="event_type_id" required>
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Subscription Type</span>
+                        <span class="lightbox-label">Tipo de suscripción</span>
                         <input v-model="form.subscription_type" class="lightbox-input" type="text" placeholder="deal.propertyChange">
                         <span class="lightbox-help">Clave que llega en el webhook y permite encontrar este evento.</span>
                     </label>
 
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Method Name</span>
+                        <span class="lightbox-label">Método del servicio</span>
                         <select v-if="shouldUseMethodSelect" v-model="form.method_name" class="lightbox-select">
-                            <option value="">No method</option>
+                            <option value="">Sin método</option>
                             <option
                                 v-for="option in methodOptionsForSelect"
                                 :key="option.value"
@@ -367,41 +367,41 @@ watch(isGenericPlatform, (value) => {
                 </p>
 
                 <div v-if="form.type === 'schedule'" class="lightbox-block">
-                    <p class="lightbox-block-title">Scheduled Event Settings</p>
+                    <p class="lightbox-block-title">Configuración de evento programado</p>
                     <div class="lightbox-grid">
                         <label class="lightbox-field">
-                            <span class="lightbox-label">Schedule Expression</span>
+                            <span class="lightbox-label">Expresión de agenda</span>
                             <input v-model="form.schedule_expression" class="lightbox-input" type="text" placeholder="0 * * * *">
                         </label>
                         <label class="lightbox-field">
-                            <span class="lightbox-label">HubDB Table ID</span>
+                            <span class="lightbox-label">ID de tabla HubDB</span>
                             <input v-model="form.hubdb_table_id" class="lightbox-input" type="number" placeholder="hubdb_table_id">
                         </label>
                     </div>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Command SQL</span>
+                            <span class="lightbox-label">Comando SQL</span>
                         <textarea v-model="form.command_sql" class="lightbox-textarea" rows="3" placeholder="select * from deals where synced = 0" />
                     </label>
-                    <label class="lightbox-check-inline"><input v-model="form.enable_update_hubdb" type="checkbox"> enable_update_hubdb</label>
+                    <label class="lightbox-check-inline"><input v-model="form.enable_update_hubdb" type="checkbox"> Actualizar HubDB</label>
                 </div>
 
                 <div v-if="isGenericPlatform" class="toggle-row">
                     <label class="lightbox-check-inline">
                         <input v-model="enableGenericConfig" type="checkbox">
-                        Generic platform configuration
+                        Configuración de plataforma genérica
                     </label>
                     <button type="button" class="lightbox-link toggle-button" @click="toggleGenericConfigPanel">
-                        {{ genericPanelOpen ? 'Hide config' : 'Show config' }}
+                        {{ genericPanelOpen ? 'Ocultar config' : 'Ver config' }}
                     </button>
                 </div>
 
                 <div v-if="enableGenericConfig && isGenericPlatform && genericPanelOpen" class="lightbox-block">
-                    <p class="lightbox-block-title">Generic HTTP Configuration</p>
+                    <p class="lightbox-block-title">Configuración HTTP genérica</p>
                     <p class="lightbox-help">{{ genericConfigHelp }}</p>
 
                     <div class="lightbox-grid">
                         <label class="lightbox-field">
-                            <span class="lightbox-label">HTTP Method</span>
+                            <span class="lightbox-label">Método HTTP</span>
                             <select v-model="form.http_method" class="lightbox-select">
                                 <option>GET</option>
                                 <option>POST</option>
@@ -412,24 +412,24 @@ watch(isGenericPlatform, (value) => {
                         </label>
 
                         <label class="lightbox-field">
-                            <span class="lightbox-label">Base URL</span>
+                            <span class="lightbox-label">URL base</span>
                             <input v-model="form.http_base_url" class="lightbox-input" type="url" placeholder="https://api.example.com">
                         </label>
 
                         <label class="lightbox-field">
-                            <span class="lightbox-label">Path</span>
+                            <span class="lightbox-label">Ruta</span>
                             <input v-model="form.http_path" class="lightbox-input" type="text" placeholder="/v1/orders/sync">
                         </label>
 
                         <label class="lightbox-check-inline">
                             <input v-model="useEventAuthOverride" type="checkbox">
-                            Override platform auth for this event
+                            Sobrescribir autenticación de plataforma para este evento
                         </label>
 
                         <label class="lightbox-field">
-                            <span class="lightbox-label">Auth Mode</span>
+                            <span class="lightbox-label">Modo de autenticación</span>
                             <select v-model="form.http_auth_mode" class="lightbox-select" :disabled="!useEventAuthOverride">
-                                <option value="">Auth mode (optional)</option>
+                                <option value="">Modo de autenticación (opcional)</option>
                                 <option value="bearer_api_key">bearer_api_key</option>
                                 <option value="basic_auth">basic_auth</option>
                                 <option value="oauth2_client_credentials">oauth2_client_credentials</option>
@@ -440,11 +440,11 @@ watch(isGenericPlatform, (value) => {
                         </label>
 
                         <label class="lightbox-field">
-                            <span class="lightbox-label">Timeout Seconds</span>
+                            <span class="lightbox-label">Timeout en segundos</span>
                             <input v-model="form.http_timeout_seconds" class="lightbox-input" type="number" min="1" max="120" placeholder="30">
                         </label>
 
-                        <label class="lightbox-check-inline"><input v-model="form.http_active" type="checkbox"> HTTP active</label>
+                        <label class="lightbox-check-inline"><input v-model="form.http_active" type="checkbox"> HTTP activo</label>
                     </div>
 
                     <div class="json-stack">
@@ -459,7 +459,7 @@ watch(isGenericPlatform, (value) => {
                         </label>
 
                         <label class="lightbox-field">
-                            <p class="field-label">Auth config JSON</p>
+                            <p class="field-label">Config de autenticación JSON</p>
                             <textarea
                                 v-model="form.http_auth_config_text"
                                 class="lightbox-textarea"
@@ -473,7 +473,7 @@ watch(isGenericPlatform, (value) => {
                         </label>
 
                         <label class="lightbox-field">
-                            <p class="field-label">Retry policy JSON</p>
+                            <p class="field-label">Política de reintentos JSON</p>
                             <textarea v-model="form.http_retry_policy_text" class="lightbox-textarea" rows="2" placeholder='{"max_attempts":3}' />
                         </label>
 
@@ -483,7 +483,7 @@ watch(isGenericPlatform, (value) => {
                         </label>
 
                         <label class="lightbox-field">
-                            <p class="field-label">Allowlist Domains JSON</p>
+                            <p class="field-label">Dominios permitidos JSON</p>
                             <textarea v-model="form.http_allowlist_domains_text" class="lightbox-textarea" rows="2" placeholder='["api.example.com"]' />
                         </label>
                     </div>
@@ -491,7 +491,7 @@ watch(isGenericPlatform, (value) => {
 
                 <div class="json-stack">
                     <label class="lightbox-field">
-                        <p class="field-label">Payload Mapping JSON</p>
+                        <p class="field-label">Mapeo de payload JSON</p>
                         <textarea v-model="form.payload_mapping_text" class="lightbox-textarea" rows="4" :placeholder="payloadMappingPlaceholder" />
                         <p class="lightbox-help">Opcional. Déjalo vacío si este evento no necesita remapear campos del payload.</p>
                     </label>
@@ -503,11 +503,11 @@ watch(isGenericPlatform, (value) => {
                     </label>
                 </div>
 
-                <label class="lightbox-check-inline"><input v-model="form.active" type="checkbox"> Active</label>
+                <label class="lightbox-check-inline"><input v-model="form.active" type="checkbox"> Activo</label>
 
                 <div class="lightbox-actions">
-                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Save changes' : 'Create event' }}</button>
-                    <Link class="lightbox-link" href="/admin/events">Cancel</Link>
+                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Guardar cambios' : 'Crear evento' }}</button>
+                    <Link class="lightbox-link" href="/admin/events">Cancelar</Link>
                 </div>
             </form>
         </LightboxFormModal>

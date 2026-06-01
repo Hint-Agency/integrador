@@ -32,29 +32,29 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout title="Users">
-        <LightboxFormModal :title="isEdit ? `Edit user #${props.user?.id}` : 'Create user'" close-href="/admin/users">
+    <AdminLayout title="Usuarios">
+        <LightboxFormModal :title="isEdit ? `Editar usuario #${props.user?.id}` : 'Crear usuario'" close-href="/admin/users">
             <form class="lightbox-form" @submit.prevent="submit">
                 <div class="lightbox-grid">
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Username</span>
-                        <input v-model="form.username" class="lightbox-input" type="text" placeholder="Username" required>
+                        <span class="lightbox-label">Usuario</span>
+                        <input v-model="form.username" class="lightbox-input" type="text" placeholder="Usuario" required>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">First Name</span>
-                        <input v-model="form.first_name" class="lightbox-input" type="text" placeholder="First Name" required>
+                        <span class="lightbox-label">Nombre</span>
+                        <input v-model="form.first_name" class="lightbox-input" type="text" placeholder="Nombre" required>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">Last Name</span>
-                        <input v-model="form.last_name" class="lightbox-input" type="text" placeholder="Last Name" required>
+                        <span class="lightbox-label">Apellido</span>
+                        <input v-model="form.last_name" class="lightbox-input" type="text" placeholder="Apellido" required>
                     </label>
                     <label class="lightbox-field">
                         <span class="lightbox-label">Email</span>
                         <input v-model="form.email" class="lightbox-input" type="email" placeholder="Email" required>
                     </label>
                     <label class="lightbox-field">
-                        <span class="lightbox-label">{{ isEdit ? 'New Password' : 'Password' }}</span>
-                        <input v-model="form.password" class="lightbox-input" type="password" :placeholder="isEdit ? 'New password (optional)' : 'Password'" :required="!isEdit">
+                        <span class="lightbox-label">{{ isEdit ? 'Nueva contraseña' : 'Contraseña' }}</span>
+                        <input v-model="form.password" class="lightbox-input" type="password" :placeholder="isEdit ? 'Nueva contraseña (opcional)' : 'Contraseña'" :required="!isEdit">
                     </label>
                 </div>
 
@@ -69,8 +69,8 @@ const submit = () => {
                 </div>
 
                 <div class="lightbox-actions">
-                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Save changes' : 'Create user' }}</button>
-                    <Link class="lightbox-link" href="/admin/users">Cancel</Link>
+                    <button class="lightbox-submit" type="submit" :disabled="form.processing">{{ isEdit ? 'Guardar cambios' : 'Crear usuario' }}</button>
+                    <Link class="lightbox-link" href="/admin/users">Cancelar</Link>
                 </div>
             </form>
         </LightboxFormModal>

@@ -1,19 +1,20 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\AuthController;
-use App\Http\Controllers\AdminPanelController;
+use App\Http\Controllers\Admin\CategoryManagementController;
+use App\Http\Controllers\Admin\ConfigManagementController;
 use App\Http\Controllers\Admin\EventManagementController;
 use App\Http\Controllers\Admin\EventTriggerManagementController;
 use App\Http\Controllers\Admin\PlatformManagementController;
 use App\Http\Controllers\Admin\PropertyManagementController;
 use App\Http\Controllers\Admin\PropertyRelationshipManagementController;
-use App\Http\Controllers\Admin\UserManagementController;
+use App\Http\Controllers\Admin\RecordManagementController;
 use App\Http\Controllers\Admin\RoleManagementController;
-use App\Http\Controllers\Admin\CategoryManagementController;
-use App\Http\Controllers\Admin\ConfigManagementController;
-use App\Http\Controllers\EventController;
+use App\Http\Controllers\Admin\UserManagementController;
+use App\Http\Controllers\AdminPanelController;
+use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EventController;
+use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     if (auth()->check()) {
@@ -125,6 +126,9 @@ Route::middleware('auth')->group(function () {
         Route::get('/records', [AdminPanelController::class, 'records'])
             ->name('records')
             ->middleware('permission:records.view');
+        Route::post('/records/cleanup', [RecordManagementController::class, 'cleanup'])
+            ->name('records.cleanup')
+            ->middleware('permission:records.manage');
 
         Route::get('/users', [AdminPanelController::class, 'users'])
             ->name('users')

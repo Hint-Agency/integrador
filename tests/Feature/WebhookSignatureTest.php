@@ -58,7 +58,7 @@ class WebhookSignatureTest extends TestCase
         $response->assertStatus(200);
         $response->assertJson([
             'status' => 'success',
-            'message' => 'Webhook received',
+            'message' => 'Webhook recibido.',
         ]);
 
         $this->assertDatabaseCount('webhook_calls', 1);
@@ -138,7 +138,7 @@ class WebhookSignatureTest extends TestCase
         $response->assertStatus(401);
         $response->assertJson([
             'status' => 'error',
-            'message' => 'Webhook not received, invalid signature.',
+            'message' => 'Webhook no recibido: firma inválida.',
         ]);
         $this->assertDatabaseCount('webhook_calls', 0);
         Queue::assertNothingPushed();

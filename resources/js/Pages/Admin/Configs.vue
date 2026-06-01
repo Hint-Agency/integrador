@@ -12,7 +12,7 @@ const remove = (id) => router.delete(`/admin/configs/${id}`, { preserveScroll: t
 </script>
 
 <template>
-    <AdminLayout title="Configs">
+    <AdminLayout title="Configuración">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 
@@ -30,9 +30,9 @@ const remove = (id) => router.delete(`/admin/configs/${id}`, { preserveScroll: t
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Key</th>
-                        <th>Value</th>
-                        <th>Encrypted</th>
+                        <th>Clave</th>
+                        <th>Valor</th>
+                        <th>Cifrado</th>
                         <th>Actualizado</th>
                         <th>Acciones</th>
                     </tr>

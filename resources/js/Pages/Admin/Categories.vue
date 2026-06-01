@@ -12,7 +12,7 @@ const remove = (id) => router.delete(`/admin/categories/${id}`, { preserveScroll
 </script>
 
 <template>
-    <AdminLayout title="Categories">
+    <AdminLayout title="Categorías">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 

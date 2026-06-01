@@ -9,6 +9,7 @@ use App\Models\EventHttpConfig;
 use App\Models\Permission;
 use App\Models\Platform;
 use App\Models\Property;
+use App\Models\Record;
 use App\Models\Role;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -265,6 +266,98 @@ class AdminPanelPagesTest extends TestCase
         $response = $this->actingAs($actor)->get('/admin/records');
 
         $response->assertStatus(200);
+    }
+
+    public function test_admin_records_page_groups_child_records_under_parent(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'records.view');
+
+        $parent = Record::query()->create([
+            'event_type' => 'root.flow',
+            'status' => 'success',
+            'payload' => [],
+            'message' => 'Root flow',
+        ]);
+
+        Record::query()->create([
+            'record_id' => $parent->id,
+            'event_type' => 'child.flow.error',
+            'status' => 'error',
+            'payload' => [],
+            'message' => 'Child flow error',
+        ]);
+
+        $response = $this->actingAs($actor)->get('/admin/records?status=error');
+
+        $response->assertStatus(200);
+        $response->assertSee('root.flow');
+        $response->assertSee('child.flow.error');
+    }
+
+    public function test_admin_records_cleanup_deletes_old_records_and_keeps_warnings_errors(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'records.manage');
+
+        $oldSuccess = Record::query()->create([
+            'event_type' => 'test.old.success',
+            'status' => 'success',
+            'payload' => [],
+            'message' => 'Old success',
+        ]);
+        $oldSuccess->forceFill(['created_at' => now()->subDays(45), 'updated_at' => now()->subDays(45)])->save();
+
+        $oldError = Record::query()->create([
+            'event_type' => 'test.old.error',
+            'status' => 'error',
+            'payload' => [],
+            'message' => 'Old error',
+        ]);
+        $oldError->forceFill(['created_at' => now()->subDays(45), 'updated_at' => now()->subDays(45)])->save();
+
+        $recentSuccess = Record::query()->create([
+            'event_type' => 'test.recent.success',
+            'status' => 'success',
+            'payload' => [],
+            'message' => 'Recent success',
+        ]);
+
+        $response = $this->actingAs($actor)->post('/admin/records/cleanup', [
+            'mode' => 'older_than',
+            'older_than_days' => 30,
+            'keep_warnings_errors' => true,
+        ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseMissing('records', ['id' => $oldSuccess->id]);
+        $this->assertDatabaseHas('records', ['id' => $oldError->id]);
+        $this->assertDatabaseHas('records', ['id' => $recentSuccess->id]);
+    }
+
+    public function test_admin_records_cleanup_filtered_mode_requires_a_filter(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'records.manage');
+
+        Record::query()->create([
+            'event_type' => 'test.cleanup.guard',
+            'status' => 'success',
+            'payload' => [],
+            'message' => 'Guarded record',
+        ]);
+
+        $response = $this->actingAs($actor)->post('/admin/records/cleanup', [
+            'mode' => 'filtered',
+            'keep_warnings_errors' => false,
+        ]);
+
+        $response->assertRedirect();
+        $response->assertSessionHas('error');
+        $this->assertDatabaseCount('records', 1);
     }
 
     public function test_admin_event_create_endpoint_creates_event(): void

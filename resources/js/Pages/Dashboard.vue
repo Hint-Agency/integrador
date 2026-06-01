@@ -10,10 +10,10 @@ defineProps({
 </script>
 
 <template>
-    <AdminLayout title="Dashboard">
+    <AdminLayout title="Panel">
         <div class="dashboard-grid">
             <section class="hero-card">
-                <p class="kicker">Integration Control Center</p>
+                <p class="kicker">Centro de control de integraciones</p>
                 <h2>Panel de administración</h2>
                 <p>
                     Estado general del sistema de integración, eventos configurados y trazabilidad operativa.
@@ -34,7 +34,7 @@ defineProps({
                     <strong>{{ stats.platforms }}</strong>
                 </article>
                 <article class="card">
-                    <span class="label">Records</span>
+                    <span class="label">Registros</span>
                     <strong>{{ stats.records }}</strong>
                 </article>
             </section>
@@ -49,7 +49,7 @@ defineProps({
                     <a href="/admin/events">Eventos</a>
                     <a href="/admin/platforms">Plataformas</a>
                     <a href="/admin/properties">Propiedades</a>
-                    <a href="/admin/records">Records</a>
+                    <a href="/admin/records">Registros</a>
                 </div>
             </section>
         </div>

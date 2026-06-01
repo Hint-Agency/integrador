@@ -125,8 +125,8 @@ const missingRequiredCount = computed(() => requiredFields.value
     }).length);
 
 const canTestConnection = computed(() => isEdit.value && !form.processing);
-const webhookSecretLabel = computed(() => form.webhook_validation_mode === 'shared_token' ? 'Shared Token' : 'Secret Key');
-const webhookSecretPlaceholder = computed(() => form.webhook_validation_mode === 'shared_token' ? 'Enter shared webhook token' : 'Enter secret key');
+const webhookSecretLabel = computed(() => form.webhook_validation_mode === 'shared_token' ? 'Token compartido' : 'Llave secreta');
+const webhookSecretPlaceholder = computed(() => form.webhook_validation_mode === 'shared_token' ? 'Ingresa el token compartido del webhook' : 'Ingresa la llave secreta');
 
 const compactObject = (obj) => Object.fromEntries(Object.entries(obj)
     .filter(([_, value]) => {
@@ -421,7 +421,7 @@ const copyToken = async () => {
         if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(form.secret_key);
         } else {
-            throw new Error('Clipboard API unavailable.');
+            throw new Error('API del portapapeles no disponible.');
         }
 
         window.alert('Token copiado al portapapeles.');
@@ -480,36 +480,36 @@ const submit = () => {
 </script>
 
 <template>
-    <AdminLayout title="Platforms">
+    <AdminLayout title="Plataformas">
         <form class="platform-page" @submit.prevent="submit">
             <header class="head-actions">
-                <p class="subtitle">Configure a new platform integration</p>
+                <p class="subtitle">Configura una integración de plataforma</p>
                 <div class="actions">
-                    <span v-if="missingRequiredCount > 0" class="warning">Complete required fields</span>
+                    <span v-if="missingRequiredCount > 0" class="warning">Completa los campos requeridos</span>
                     <button type="button" class="secondary" :disabled="!canTestConnection" @click="testConnection">
-                        Test connection
+                        Probar conexión
                     </button>
-                    <button type="submit" class="primary" :disabled="form.processing">Save platform</button>
+                    <button type="submit" class="primary" :disabled="form.processing">Guardar plataforma</button>
                 </div>
             </header>
 
             <section class="block">
                 <header>
-                    <h2>Basic Information</h2>
-                    <p>Platform name and type configuration</p>
+                    <h2>Información básica</h2>
+                    <p>Nombre y tipo de plataforma</p>
                 </header>
                 <div class="grid two">
                     <label>
-                        <span>Platform Name</span>
-                        <input v-model="form.name" type="text" placeholder="Enter platform name" required>
+                        <span>Nombre de plataforma</span>
+                        <input v-model="form.name" type="text" placeholder="Ingresa el nombre de la plataforma" required>
                     </label>
                     <label>
-                        <span>Platform Type</span>
+                        <span>Tipo de plataforma</span>
                         <select v-model="form.type" required>
                             <option value="hubspot">HubSpot</option>
                             <option value="odoo">Odoo</option>
                             <option value="netsuite">NetSuite</option>
-                            <option value="generic">Generic</option>
+                            <option value="generic">Genérica</option>
                         </select>
                     </label>
                     <label>
@@ -521,34 +521,34 @@ const submit = () => {
 
             <section v-if="form.type === 'hubspot'" class="block">
                 <header>
-                    <h2>HubSpot Configuration</h2>
-                    <p>API credentials and authentication settings</p>
+                    <h2>Configuración HubSpot</h2>
+                    <p>Credenciales API y autenticación</p>
                 </header>
                 <div class="grid one">
                     <label>
-                        <span>API Token</span>
-                        <input v-model="form.hubspot_api_token" type="text" placeholder="Enter your HubSpot API token" required>
+                        <span>Token API</span>
+                        <input v-model="form.hubspot_api_token" type="text" placeholder="Ingresa el token API de HubSpot" required>
                     </label>
                 </div>
             </section>
 
             <section v-if="form.type === 'odoo'" class="block">
                 <header>
-                    <h2>Odoo Configuration</h2>
-                    <p>Database credentials and connection settings</p>
+                    <h2>Configuración Odoo</h2>
+                    <p>Credenciales de base de datos y conexión</p>
                 </header>
                 <div class="grid two">
                     <label>
-                        <span>Username</span>
-                        <input v-model="form.odoo_username" type="text" placeholder="Enter Odoo username" required>
+                        <span>Usuario</span>
+                        <input v-model="form.odoo_username" type="text" placeholder="Ingresa el usuario Odoo" required>
                     </label>
                     <label>
-                        <span>Password</span>
-                        <input v-model="form.odoo_password" type="password" placeholder="Enter Odoo password" required>
+                        <span>Contraseña</span>
+                        <input v-model="form.odoo_password" type="password" placeholder="Ingresa la contraseña Odoo" required>
                     </label>
                     <label>
-                        <span>Database</span>
-                        <input v-model="form.odoo_database" type="text" placeholder="Enter database name" required>
+                        <span>Base de datos</span>
+                        <input v-model="form.odoo_database" type="text" placeholder="Ingresa el nombre de la base" required>
                     </label>
                     <label>
                         <span>Odoo URL</span>
@@ -559,8 +559,8 @@ const submit = () => {
 
             <section v-if="form.type === 'netsuite'" class="block">
                 <header>
-                    <h2>NetSuite Configuration</h2>
-                    <p>OAuth credentials and certificate settings</p>
+                    <h2>Configuración NetSuite</h2>
+                    <p>Credenciales OAuth y certificado</p>
                 </header>
                 <div class="grid two">
                     <label>
@@ -569,48 +569,48 @@ const submit = () => {
                     </label>
                     <label>
                         <span>Consumer Key</span>
-                        <input v-model="form.netsuite_consumer_key" type="text" placeholder="Enter consumer key" required>
+                        <input v-model="form.netsuite_consumer_key" type="text" placeholder="Ingresa el consumer key" required>
                     </label>
                     <label>
                         <span>Consumer Secret</span>
-                        <input v-model="form.netsuite_consumer_secret" type="password" placeholder="Enter consumer secret" required>
+                        <input v-model="form.netsuite_consumer_secret" type="password" placeholder="Ingresa el consumer secret" required>
                     </label>
                     <label>
-                        <span>Token ID</span>
-                        <input v-model="form.netsuite_token_id" type="text" placeholder="Enter token ID" required>
+                        <span>ID de token</span>
+                        <input v-model="form.netsuite_token_id" type="text" placeholder="Ingresa el ID de token" required>
                     </label>
                     <label>
                         <span>Token Secret</span>
-                        <input v-model="form.netsuite_token_secret" type="password" placeholder="Enter token secret" required>
+                        <input v-model="form.netsuite_token_secret" type="password" placeholder="Ingresa el token secret" required>
                     </label>
                 </div>
                 <div class="grid one">
                     <label>
-                        <span>Private Key</span>
-                        <textarea v-model="form.netsuite_private_key" rows="4" placeholder="Paste your private key here" required />
+                        <span>Llave privada</span>
+                        <textarea v-model="form.netsuite_private_key" rows="4" placeholder="Pega aquí la llave privada" required />
                     </label>
                 </div>
             </section>
 
             <section v-if="form.type === 'generic'" class="block">
                 <header>
-                    <h2>Generic Configuration</h2>
-                    <p>Authentication and integration settings</p>
+                    <h2>Configuración genérica</h2>
+                    <p>Autenticación y parámetros de integración</p>
                 </header>
                 <div class="grid two">
                     <label>
-                        <span>Service Driver</span>
+                        <span>Driver de servicio</span>
                         <select v-model="form.generic_service_driver">
-                            <option value="">Select service driver</option>
+                            <option value="">Selecciona un driver</option>
                             <option value="azure_sql">azure_sql</option>
                             <option value="aspel">aspel</option>
                             <option value="generic_http">generic_http</option>
                         </select>
                     </label>
                     <label>
-                        <span>Auth Mode</span>
+                        <span>Modo de autenticación</span>
                         <select v-model="form.generic_auth_mode" :disabled="isAzureSqlDriver">
-                            <option value="">Select auth mode</option>
+                            <option value="">Selecciona modo de autenticación</option>
                             <option value="bearer_api_key">bearer_api_key</option>
                             <option value="basic_auth">basic_auth</option>
                             <option value="oauth2_client_credentials">oauth2_client_credentials</option>
@@ -618,7 +618,7 @@ const submit = () => {
                     </label>
                     <div v-if="isAzureSqlDriver" class="field-group full">
                         <label>
-                            <span>Connection String</span>
+                            <span>Cadena de conexión</span>
                             <textarea
                                 v-model="form.azure_sql_connection_string"
                                 rows="3"
@@ -627,7 +627,7 @@ const submit = () => {
                         </label>
                         <div class="inline-actions">
                             <button type="button" class="secondary small" @click="parseAzureSqlConnectionString">
-                                Parse connection string
+                                Parsear cadena de conexión
                             </button>
                             <p class="helper">
                                 Pega la cadena completa y convertimos sus valores a los campos de abajo. No guardamos la cadena cruda.
@@ -643,48 +643,48 @@ const submit = () => {
                         <input v-model="form.azure_sql_port" type="text" placeholder="1433">
                     </label>
                     <label v-if="isAzureSqlDriver">
-                        <span>Database</span>
+                        <span>Base de datos</span>
                         <input v-model="form.azure_sql_database" type="text" placeholder="DB-CRM">
                     </label>
                     <label v-if="isAzureSqlDriver">
-                        <span>Username</span>
+                        <span>Usuario</span>
                         <input v-model="form.azure_sql_username" type="text" placeholder="sqladmin">
                     </label>
                     <label v-if="isAzureSqlDriver">
-                        <span>Password</span>
-                        <input v-model="form.azure_sql_password" type="password" placeholder="Enter SQL password">
+                        <span>Contraseña</span>
+                        <input v-model="form.azure_sql_password" type="password" placeholder="Ingresa la contraseña SQL">
                     </label>
                     <label v-if="isAzureSqlDriver">
-                        <span>Login Timeout</span>
+                        <span>Timeout de login</span>
                         <input v-model="form.azure_sql_login_timeout" type="number" min="1" placeholder="30">
                     </label>
                     <label v-if="isAzureSqlDriver" class="check">
                         <input v-model="form.azure_sql_encrypt" type="checkbox">
-                        <span>Encrypt connection</span>
+                        <span>Cifrar conexión</span>
                     </label>
                     <label v-if="isAzureSqlDriver" class="check">
                         <input v-model="form.azure_sql_trust_server_certificate" type="checkbox">
-                        <span>Trust server certificate</span>
+                        <span>Confiar en certificado del servidor</span>
                     </label>
                     <label v-if="isGenericBearer && !isAzureSqlDriver">
                         <span>API Key</span>
-                        <input v-model="form.generic_api_key" type="text" placeholder="Enter API key">
+                        <input v-model="form.generic_api_key" type="text" placeholder="Ingresa la API key">
                     </label>
                     <label v-if="isGenericBasic && !isAzureSqlDriver">
-                        <span>Basic User</span>
-                        <input v-model="form.generic_basic_user" type="text" placeholder="Enter basic user">
+                        <span>Usuario básico</span>
+                        <input v-model="form.generic_basic_user" type="text" placeholder="Ingresa el usuario básico">
                     </label>
                     <label v-if="isGenericBasic && !isAzureSqlDriver">
-                        <span>Basic Password</span>
-                        <input v-model="form.generic_basic_password" type="password" placeholder="Enter basic password">
+                        <span>Contraseña básica</span>
+                        <input v-model="form.generic_basic_password" type="password" placeholder="Ingresa la contraseña básica">
                     </label>
                     <label v-if="isGenericOAuth && !isAzureSqlDriver">
                         <span>OAuth Client ID</span>
-                        <input v-model="form.generic_oauth_client_id" type="text" placeholder="Enter OAuth client ID">
+                        <input v-model="form.generic_oauth_client_id" type="text" placeholder="Ingresa el OAuth client ID">
                     </label>
                     <label v-if="isGenericOAuth && !isAzureSqlDriver">
                         <span>OAuth Client Secret</span>
-                        <input v-model="form.generic_oauth_client_secret" type="password" placeholder="Enter OAuth client secret">
+                        <input v-model="form.generic_oauth_client_secret" type="password" placeholder="Ingresa el OAuth client secret">
                     </label>
                     <label v-if="isGenericOAuth && !isAzureSqlDriver">
                         <span>OAuth Token URL</span>
@@ -695,19 +695,19 @@ const submit = () => {
 
             <section class="block">
                 <header>
-                    <h2>Security &amp; API Settings</h2>
-                    <p>Webhook signatures and API configuration</p>
+                    <h2>Seguridad y API</h2>
+                    <p>Firma de webhooks y configuración API</p>
                 </header>
                 <div class="grid two">
                     <label>
-                        <span>Webhook Signature</span>
-                        <input v-model="form.signature" type="text" placeholder="Enter webhook signature">
+                        <span>Firma del webhook</span>
+                        <input v-model="form.signature" type="text" placeholder="Ingresa el header de firma del webhook">
                     </label>
                     <label>
-                        <span>Validation Mode</span>
+                        <span>Modo de validación</span>
                         <select v-model="form.webhook_validation_mode">
                             <option value="hmac_sha256">HMAC SHA-256</option>
-                            <option value="shared_token">Shared token</option>
+                            <option value="shared_token">Token compartido</option>
                         </select>
                     </label>
                     <label>
@@ -716,17 +716,17 @@ const submit = () => {
                     </label>
                     <label v-if="form.webhook_validation_mode === 'shared_token'" class="check full">
                         <input v-model="form.webhook_allow_token_in_query" type="checkbox">
-                        <span>Allow shared token in URL/body for platforms that cannot send headers</span>
+                        <span>Permitir token compartido en URL/body para plataformas que no pueden enviar headers</span>
                     </label>
                     <div class="token-actions full">
                         <button type="button" class="secondary small" @click="generateToken">
-                            Generate token
+                            Generar token
                         </button>
                         <button type="button" class="secondary small" :disabled="!form.secret_key" @click="copyToken">
-                            Copy token
+                            Copiar token
                         </button>
                         <button type="button" class="secondary danger small" :disabled="!form.secret_key" @click="revokeToken">
-                            Revoke token
+                            Revocar token
                         </button>
                     </div>
                     <label class="full">
@@ -735,15 +735,15 @@ const submit = () => {
                     </label>
                     <label class="check full">
                         <input v-model="form.active" type="checkbox">
-                        <span>Active platform</span>
+                        <span>Plataforma activa</span>
                     </label>
                 </div>
             </section>
 
             <section class="block">
                 <header>
-                    <h2>Advanced Settings</h2>
-                    <p>Non-sensitive platform settings stored in platforms.settings</p>
+                    <h2>Configuración avanzada</h2>
+                    <p>Parámetros no sensibles guardados en platforms.settings</p>
                 </header>
                 <div class="grid one">
                     <label>
@@ -763,8 +763,8 @@ const submit = () => {
             </section>
 
             <footer class="bottom-actions">
-                <Link class="secondary link" href="/admin/platforms">Cancel</Link>
-                <button type="submit" class="primary" :disabled="form.processing">Save platform</button>
+                <Link class="secondary link" href="/admin/platforms">Cancelar</Link>
+                <button type="submit" class="primary" :disabled="form.processing">Guardar plataforma</button>
             </footer>
         </form>
     </AdminLayout>

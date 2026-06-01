@@ -49,7 +49,7 @@ const resetFilters = () => {
 </script>
 
 <template>
-    <AdminLayout title="Properties">
+    <AdminLayout title="Propiedades">
         <div v-if="$page.props.flash?.success" class="flash success">{{ $page.props.flash.success }}</div>
         <div v-if="$page.props.flash?.error" class="flash error">{{ $page.props.flash.error }}</div>
 
@@ -113,9 +113,9 @@ const resetFilters = () => {
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Name</th>
-                        <th>Key</th>
-                        <th>Type</th>
+                        <th>Nombre</th>
+                        <th>Clave</th>
+                        <th>Tipo</th>
                         <th>Plataforma</th>
                         <th>Categorías</th>
                         <th>Requerida</th>
