@@ -142,6 +142,79 @@ class HubspotProductUpdateResolutionTest extends TestCase
         $this->assertSame('MC-000099999', data_get($result, 'data.output_payload.0.identificador_db'));
     }
 
+    public function test_product_updated_event_uses_creation_fallback_when_hubspot_search_fails_and_next_event_exists(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'Hubspot directo',
+            'slug' => 'hubspot-directo-search-fallback',
+            'type' => 'hubspot',
+            'credentials' => [
+                'access_token' => 'token_123',
+            ],
+            'active' => true,
+        ]);
+
+        $createEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Creación de productos',
+            'event_type_id' => 'product.created',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Actualización de productos',
+            'event_type_id' => 'product.updated',
+            'type' => 'webhook',
+            'to_event_id' => $createEvent->id,
+            'active' => true,
+        ]);
+
+        $hubspotApi = Mockery::mock(HubspotApiServiceRefactored::class);
+        $hubspotApi->shouldReceive('searchObjectByProperty')
+            ->once()
+            ->with('products', 'odoo_id', '2660', ['odoo_id'])
+            ->andReturn([
+                'success' => false,
+                'error' => [
+                    'status' => 'error',
+                    'message' => 'There was a problem with the request.',
+                    'correlationId' => '019e853e-54e4-7d07-948e-0c9389edc170',
+                ],
+            ]);
+        $hubspotApi->shouldNotReceive('updateProduct');
+
+        $productCache = Mockery::mock(ProductCacheService::class);
+        $productCache->shouldNotReceive('preload');
+
+        $service = new HubspotService($platform, $event, null, $hubspotApi, $productCache);
+        $result = $service->updateProducts([
+            [
+                'odoo_id' => '2660',
+                'hs_sku' => '0107260427',
+                'sku' => '0107260427',
+                'name' => 'Producto nuevo',
+            ],
+        ]);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('warning', $result['status'] ?? null);
+        $this->assertSame(0, data_get($result, 'data.updated_count'));
+        $this->assertSame(0, data_get($result, 'data.error_count'));
+        $this->assertSame(1, data_get($result, 'data.not_found_count'));
+        $this->assertSame('product_search_failed_create_fallback', data_get($result, 'data.warning_reason'));
+        $this->assertSame('2660', data_get($result, 'data.output_payload.0.odoo_id'));
+        $this->assertSame(
+            'hubspot_product_search_failed_create_fallback',
+            data_get($result, 'data.output_payload.0._resolution_warning.reason')
+        );
+        $this->assertSame(
+            '019e853e-54e4-7d07-948e-0c9389edc170',
+            data_get($result, 'data.fallback_warnings.0.details.correlationId')
+        );
+    }
+
     public function test_product_updated_event_can_resolve_hubspot_id_by_odoo_id(): void
     {
         $platform = Platform::query()->create([

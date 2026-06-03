@@ -281,19 +281,28 @@ class AdminPanelPagesTest extends TestCase
             'message' => 'Root flow',
         ]);
 
-        Record::query()->create([
+        $child = Record::query()->create([
             'record_id' => $parent->id,
-            'event_type' => 'child.flow.error',
+            'event_type' => 'child.flow.processing',
+            'status' => 'processing',
+            'payload' => [],
+            'message' => 'Child flow processing',
+        ]);
+
+        Record::query()->create([
+            'record_id' => $child->id,
+            'event_type' => 'grandchild.flow.error',
             'status' => 'error',
             'payload' => [],
-            'message' => 'Child flow error',
+            'message' => 'Grandchild flow error',
         ]);
 
         $response = $this->actingAs($actor)->get('/admin/records?status=error');
 
         $response->assertStatus(200);
         $response->assertSee('root.flow');
-        $response->assertSee('child.flow.error');
+        $response->assertSee('child.flow.processing');
+        $response->assertSee('grandchild.flow.error');
     }
 
     public function test_admin_records_cleanup_deletes_old_records_and_keeps_warnings_errors(): void

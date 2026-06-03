@@ -628,8 +628,8 @@ class OdooService extends BaseService
                 ? 'Odoo invoice payload prepared.'
                 : 'Odoo invoice payload prepared with warnings.',
             'data' => [
-            'invoice' => $invoice,
-            'saleOrder' => $saleOrder,
+                'invoice' => $invoice,
+                'saleOrder' => $saleOrder,
                 'deal_id' => $dealId,
                 'warnings' => $warnings,
                 'output_payload' => $outputPayload,
@@ -1493,7 +1493,7 @@ class OdooService extends BaseService
                     Arr::get($fields, 'product_template_id'),
                     Arr::get($fields, 'product_tmpl_id'),
                     Arr::get($fields, 'odoo_id'),
-                    Arr::get($product, 'target_id'),
+                    $this->firstNumeric([Arr::get($product, 'target_id')]),
                 ]),
                 'name' => Arr::get($fields, 'name', Arr::get($fields, 'display_name')),
                 'quantity' => Arr::get($fields, 'quantity', 1),
@@ -2009,7 +2009,23 @@ class OdooService extends BaseService
 
     private function normalizeSaleLine(array $product): array
     {
+        $uom = $product['product_uom'] ?? null;
+        if ($uom !== null) {
+            $product['product_uom'] = $this->catalogValue('uom', $uom) ?? $product['product_uom'];
+        }
+
         foreach (['product_template_id', 'product_uom'] as $field) {
+            if (isset($product[$field]) && ! is_numeric($product[$field])) {
+                $normalized = $this->normalizeOdooFieldValue($field, $product[$field]);
+                if ($this->isUnresolvedRelationalValue($normalized)) {
+                    unset($product[$field]);
+
+                    continue;
+                }
+
+                $product[$field] = $normalized;
+            }
+
             if (isset($product[$field]) && is_numeric($product[$field])) {
                 $product[$field] = (int) $product[$field];
             }
@@ -2025,11 +2041,6 @@ class OdooService extends BaseService
         if ($tax !== null) {
             $mappedTax = $this->catalogValue('taxes', $tax) ?? $tax;
             $product['tax_id'] = [[6, 0, [(int) $mappedTax]]];
-        }
-
-        $uom = $product['product_uom'] ?? null;
-        if ($uom !== null) {
-            $product['product_uom'] = $this->catalogValue('uom', $uom) ?? $uom;
         }
 
         return $product;
@@ -2137,6 +2148,7 @@ class OdooService extends BaseService
             'cost_currency_id' => 'res.currency',
             'team_id' => 'crm.team',
             'categ_id' => 'product.category',
+            'product_template_id' => 'product.template',
             'product_uom' => 'uom.uom',
             'uom_id' => 'uom.uom',
             'uom_po_id' => 'uom.uom',

@@ -1,6 +1,7 @@
 <script setup>
 import AdminLayout from '@/Layouts/AdminLayout.vue';
 import PaginationNav from '@/Components/PaginationNav.vue';
+import RecordTreeNode from '@/Components/RecordTreeNode.vue';
 import { router } from '@inertiajs/vue3';
 import { reactive } from 'vue';
 
@@ -255,7 +256,7 @@ const localizeRecordValue = (value) => {
                         <p>{{ translateMessage(record.message) }}</p>
                     </div>
                     <div class="summary-side">
-                        <span class="children-badge">{{ record.children_count }} hijos</span>
+                        <span class="children-badge">{{ record.descendants_count }} pasos</span>
                         <span :class="['status', record.status]">{{ statusLabel(record.status) }}</span>
                     </div>
                 </summary>
@@ -299,62 +300,23 @@ const localizeRecordValue = (value) => {
 
                     <section class="children-section">
                         <div class="children-title">
-                            <h4>Eventos hijos</h4>
-                            <span>{{ record.children?.length ?? 0 }} registros</span>
+                            <h4>Secuencia del flujo</h4>
+                            <span>{{ record.descendants_count ?? 0 }} pasos posteriores</span>
                         </div>
 
-                        <p v-if="!record.children?.length" class="empty-children">Este flujo no tiene eventos hijos registrados.</p>
+                        <p v-if="!record.children?.length" class="empty-children">Este flujo no tiene eventos posteriores registrados.</p>
 
-                        <details v-for="child in record.children" :key="child.id" class="child-record">
-                            <summary class="child-summary">
-                                <div class="summary-main">
-                                    <h5>#{{ child.id }} · {{ child.event_type }}</h5>
-                                    <p>{{ translateMessage(child.message) }}</p>
-                                </div>
-                                <div class="summary-side">
-                                    <span v-if="child.children_count > 0" class="children-badge">{{ child.children_count }} subhijos</span>
-                                    <span :class="['status', child.status]">{{ statusLabel(child.status) }}</span>
-                                </div>
-                            </summary>
-
-                            <div class="child-body">
-                                <div class="meta">
-                                    <span>evento_id: {{ child.event_id ?? 'n/a' }}</span>
-                                    <span>registro_padre: {{ child.record_id ?? 'n/a' }}</span>
-                                    <span>creado: {{ child.created_at ?? 'n/a' }}</span>
-                                </div>
-
-                                <details class="record-detail">
-                                    <summary>Payload de entrada</summary>
-                                    <pre>{{ prettyJson(child.payload) }}</pre>
-                                </details>
-
-                                <details v-if="hasObjectValue(child.details) && child.details.output_payload" class="record-detail">
-                                    <summary>Payload de salida</summary>
-                                    <pre>{{ prettyJson(child.details.output_payload) }}</pre>
-                                </details>
-
-                                <details v-if="hasObjectValue(child.details) && child.details.hubspot_enrichment" class="record-detail">
-                                    <summary>Enriquecimiento HubSpot</summary>
-                                    <div class="enrichment-meta">
-                                        <p>
-                                            Propiedades mapeadas solicitadas:
-                                            <strong>{{ joinList(child.details.hubspot_enrichment.requested_properties) }}</strong>
-                                        </p>
-                                        <p>
-                                            Propiedades obtenidas:
-                                            <strong>{{ joinList(child.details.hubspot_enrichment.fetched_properties) }}</strong>
-                                        </p>
-                                    </div>
-                                    <pre>{{ prettyJson(child.details.hubspot_enrichment) }}</pre>
-                                </details>
-
-                                <details class="record-detail">
-                                    <summary>Detalles</summary>
-                                    <pre>{{ prettyJson(child.details) }}</pre>
-                                </details>
-                            </div>
-                        </details>
+                        <RecordTreeNode
+                            v-for="child in record.children"
+                            :key="child.id"
+                            :record="child"
+                            :level="1"
+                            :status-label="statusLabel"
+                            :translate-message="translateMessage"
+                            :pretty-json="prettyJson"
+                            :has-object-value="hasObjectValue"
+                            :join-list="joinList"
+                        />
                     </section>
                 </div>
             </details>
@@ -390,15 +352,11 @@ const localizeRecordValue = (value) => {
 .record-summary,.child-summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
 .record-summary::-webkit-details-marker,.child-summary::-webkit-details-marker{display:none}
 .record-summary{padding:12px}
-.child-summary{padding:10px;background:#f8fafc}
 .summary-main{min-width:0}
 .summary-side{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .record-body{padding:0 12px 12px}
-.child-body{padding:0 10px 10px}
 h3{margin:0 0 4px;font-size:15px;color:#1f2937}
-h5{margin:0 0 4px;font-size:13px;color:#1f2937}
 .record-summary p,.child-summary p{margin:0;color:#475569;font-size:13px}
-.child-summary p{font-size:12px}
 .status{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:600;height:max-content}
 .status.init{background:#e2e8f0;color:#334155}
 .status.processing{background:#dbeafe;color:#1d4ed8}
@@ -415,7 +373,6 @@ summary{cursor:pointer;color:#334155;font-size:13px}
 .children-title h4{margin:0;font-size:13px;color:#1f2937}
 .children-title span,.empty-children{font-size:12px;color:#64748b}
 .empty-children{margin:0}
-.child-record{border:1px solid #e2e8f0;border-radius:8px;background:#fff;margin-top:0}
 pre{margin:6px 0 0;background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap}
 .enrichment-meta{margin-top:6px;display:grid;gap:4px}
 .enrichment-meta p{margin:0;color:#475569;font-size:12px}

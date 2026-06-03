@@ -117,19 +117,26 @@ class HubspotApiServiceTest extends TestCase
             $body = $request->data();
             $firstGroupFilters = $body['filterGroups'][0]['filters'] ?? [];
             $secondGroupFilters = $body['filterGroups'][1]['filters'] ?? [];
+            $allFilters = collect($body['filterGroups'] ?? [])->pluck('filters');
 
-            return count($body['filterGroups'] ?? []) === 2
+            return count($body['filterGroups'] ?? []) === 4
                 && in_array([
                     'propertyName' => 'hs_sign_status',
                     'operator' => 'IN',
                     'values' => ['SIGNED', 'MANUALLY_SIGNED'],
                 ], $firstGroupFilters, true)
                 && in_array([
-                    'propertyName' => 'hs_lastmodifieddate',
+                    'propertyName' => 'hs_last_published_date',
                     'operator' => 'BETWEEN',
-                    'value' => '1779537600000',
-                    'highValue' => '1779710400000',
+                    'value' => 1779537600000,
+                    'highValue' => 1779710400000,
                 ], $firstGroupFilters, true)
+                && $allFilters->contains(fn ($filters): bool => in_array([
+                    'propertyName' => 'hs_createdate',
+                    'operator' => 'BETWEEN',
+                    'value' => 1779537600000,
+                    'highValue' => 1779710400000,
+                ], $filters, true))
                 && in_array([
                     'propertyName' => 'hs_archived',
                     'operator' => 'NOT_HAS_PROPERTY',
@@ -143,6 +150,11 @@ class HubspotApiServiceTest extends TestCase
                     'operator' => 'NOT_IN',
                     'values' => ['success', 'already_exists'],
                 ], $secondGroupFilters, true)
+                && ($body['sorts'][0] ?? null) === [
+                    'propertyName' => 'hs_last_published_date',
+                    'direction' => 'DESCENDING',
+                ]
+                && in_array('hs_last_published_date', $body['properties'] ?? [], true)
                 && in_array('last_error_odoo', $body['properties'] ?? [], true);
         });
 

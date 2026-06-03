@@ -575,50 +575,77 @@ class AdminPanelController extends Controller
             }
         };
 
-        $childRecordToArray = static function (Record $record): array {
-            return [
-                'id' => $record->id,
-                'event_id' => $record->event_id,
-                'record_id' => $record->record_id,
-                'event_type' => $record->event_type,
-                'status' => $record->status,
-                'message' => $record->message,
-                'details' => $record->details,
-                'payload' => $record->payload,
-                'children_count' => $record->childrens_count,
-                'created_at' => optional($record->created_at)?->toISOString(),
-                'event' => $record->event ? [
-                    'id' => $record->event->id,
-                    'name' => $record->event->name,
-                    'event_type_id' => $record->event->event_type_id,
-                ] : null,
-            ];
-        };
-
         $query = Record::query()
             ->whereDoesntHave('parent')
             ->with([
                 'event:id,name,event_type_id',
-                'childrens' => static function ($query): void {
-                    $query->with(['event:id,name,event_type_id'])
-                        ->withCount('childrens')
-                        ->orderBy('id');
-                },
             ])
             ->withCount('childrens')
             ->orderByDesc('id');
 
         if ($status !== '' || $eventType !== '') {
-            $query->where(static function ($query) use ($applyRecordFilters): void {
-                $query->where(static function ($query) use ($applyRecordFilters): void {
+            $matchingRecords = Record::query()
+                ->select(['id', 'record_id'])
+                ->where(static function ($query) use ($applyRecordFilters): void {
                     $applyRecordFilters($query);
-                })->orWhereHas('childrens', static function ($query) use ($applyRecordFilters): void {
-                    $applyRecordFilters($query);
-                });
-            });
+                })
+                ->get();
+
+            $rootIds = $matchingRecords
+                ->whereNull('record_id')
+                ->pluck('id');
+
+            $parentIds = $matchingRecords
+                ->pluck('record_id')
+                ->filter()
+                ->unique()
+                ->values();
+
+            while ($parentIds->isNotEmpty()) {
+                $parents = Record::query()
+                    ->select(['id', 'record_id'])
+                    ->whereIn('id', $parentIds)
+                    ->get();
+
+                $rootIds = $rootIds->merge($parents->whereNull('record_id')->pluck('id'));
+                $parentIds = $parents
+                    ->pluck('record_id')
+                    ->filter()
+                    ->unique()
+                    ->values();
+            }
+
+            $query->whereIn('id', $rootIds->unique()->values());
         }
 
-        $records = $query->paginate(25)->withQueryString()->through(static function (Record $record) use ($childRecordToArray): array {
+        $records = $query->paginate(25)->withQueryString();
+
+        $parentIds = $records->getCollection()->pluck('id')->values();
+        $descendants = collect();
+
+        while ($parentIds->isNotEmpty()) {
+            $children = Record::query()
+                ->whereIn('record_id', $parentIds)
+                ->with(['event:id,name,event_type_id'])
+                ->withCount('childrens')
+                ->orderBy('id')
+                ->get();
+
+            if ($children->isEmpty()) {
+                break;
+            }
+
+            $descendants = $descendants->merge($children);
+            $parentIds = $children->pluck('id')->values();
+        }
+
+        $childrenByParent = $descendants->groupBy('record_id');
+
+        $recordToArray = static function (Record $record) use (&$recordToArray, $childrenByParent): array {
+            $children = ($childrenByParent->get($record->id) ?? collect())
+                ->map($recordToArray)
+                ->values();
+
             return [
                 'id' => $record->id,
                 'event_id' => $record->event_id,
@@ -635,9 +662,12 @@ class AdminPanelController extends Controller
                     'name' => $record->event->name,
                     'event_type_id' => $record->event->event_type_id,
                 ] : null,
-                'children' => $record->childrens->map($childRecordToArray)->values(),
+                'children' => $children,
+                'descendants_count' => $children->sum(static fn (array $child): int => 1 + (int) ($child['descendants_count'] ?? 0)),
             ];
-        });
+        };
+
+        $records->setCollection($records->getCollection()->map($recordToArray));
 
         $eventTypes = Record::query()
             ->whereNotNull('event_type')

@@ -109,6 +109,7 @@ class CreateOrUpdateEntityJob implements ShouldQueue
         }
 
         $status = $blockedQuotes === [] ? 'success' : ($continuableQuotes === [] ? 'error' : 'warning');
+        $blockedSummary = $this->blockedQuotesSummary($blockedQuotes);
         $message = match ($status) {
             'success' => 'Entity create/update completed',
             'warning' => 'Some quotes were blocked before subscription creation',
@@ -123,6 +124,8 @@ class CreateOrUpdateEntityJob implements ShouldQueue
                 'quotes_total' => count($processedQuotes),
                 'continuable_count' => count($continuableQuotes),
                 'blocked_count' => count($blockedQuotes),
+                'reason' => $blockedQuotes === [] ? null : ($continuableQuotes === [] ? 'all_quotes_blocked_before_subscription_creation' : 'some_quotes_blocked_before_subscription_creation'),
+                'blocked_summary' => $blockedSummary,
                 'blocked_quotes' => $blockedQuotes,
                 'source_writebacks' => $sourceWritebacks,
                 'next_job' => $continuableQuotes === [] ? null : ResolveAssociationsJob::class,
@@ -539,6 +542,59 @@ class CreateOrUpdateEntityJob implements ShouldQueue
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $blockedQuotes
+     * @return array<int, array<string, mixed>>
+     */
+    private function blockedQuotesSummary(array $blockedQuotes): array
+    {
+        return array_map(function (array $blockedQuote): array {
+            $entityResults = Arr::get($blockedQuote, 'entity_results', []);
+
+            return [
+                'quote_id' => $blockedQuote['quote_id'] ?? null,
+                'hubspot_quote_id' => $blockedQuote['hubspot_quote_id'] ?? null,
+                'reason' => $blockedQuote['reason'] ?? null,
+                'message' => $this->blockedQuoteMessage($entityResults, (string) ($blockedQuote['reason'] ?? '')),
+            ];
+        }, $blockedQuotes);
+    }
+
+    private function blockedQuoteMessage(mixed $entityResults, string $reason): ?string
+    {
+        if (! is_array($entityResults)) {
+            return null;
+        }
+
+        if (str_starts_with($reason, 'company_')) {
+            return $this->entityResultErrorMessage(Arr::get($entityResults, 'company'));
+        }
+
+        if (preg_match('/^contact_(\d+)_/', $reason, $matches) === 1) {
+            $index = max(0, ((int) $matches[1]) - 1);
+
+            return $this->entityResultErrorMessage(Arr::get($entityResults, 'contacts.'.$index))
+                ?? $this->entityResultErrorMessage(Arr::get($entityResults, 'contact'));
+        }
+
+        return null;
+    }
+
+    private function entityResultErrorMessage(mixed $entityResult): ?string
+    {
+        if (! is_array($entityResult)) {
+            return null;
+        }
+
+        $message = Arr::get($entityResult, 'error')
+            ?? Arr::get($entityResult, 'service_result.message')
+            ?? Arr::get($entityResult, 'service_result.data.partner_result.error.faultString')
+            ?? Arr::get($entityResult, 'service_result.data.error.faultString')
+            ?? Arr::get($entityResult, 'service_result.data.error.message');
+
+        return is_scalar($message) && trim((string) $message) !== '' ? trim((string) $message) : null;
     }
 
     /**

@@ -161,6 +161,7 @@ class HubspotService extends BaseService
         $updated = [];
         $errors = [];
         $notFound = [];
+        $fallbackWarnings = [];
         $nextEventConfigured = $this->event?->to_event_id !== null;
 
         foreach ($updateProducts as $index => $product) {
@@ -192,6 +193,24 @@ class HubspotService extends BaseService
                 }
 
                 if (($resolved['success'] ?? false) !== true) {
+                    if ($nextEventConfigured && $this->shouldCreateProductFallbackAfterResolutionFailure($resolved)) {
+                        $fallbackWarning = [
+                            'index' => $index,
+                            'reason' => 'hubspot_product_search_failed_create_fallback',
+                            'message' => $resolved['message'] ?? 'HubSpot product search failed.',
+                            'details' => $resolved['error'] ?? null,
+                            'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                        ];
+
+                        $fallbackPayload = $payload;
+                        $fallbackPayload['_resolution_warning'] = $fallbackWarning;
+
+                        $notFound[] = $fallbackPayload;
+                        $fallbackWarnings[] = $fallbackWarning;
+
+                        continue;
+                    }
+
                     $errors[] = [
                         'index' => $index,
                         'error' => $resolved['message'] ?? 'Unable to resolve HubSpot product id.',
@@ -236,6 +255,10 @@ class HubspotService extends BaseService
         }
 
         $warningReason = null;
+        if (! empty($fallbackWarnings)) {
+            $warningReason = 'product_search_failed_create_fallback';
+        }
+
         if (! empty($notFound) && ! $nextEventConfigured) {
             $warningReason = 'missing_create_fallback_event';
         }
@@ -250,6 +273,7 @@ class HubspotService extends BaseService
                 'not_found_count' => count($notFound),
                 'errors' => $errors,
                 'not_found' => $notFound,
+                'fallback_warnings' => $fallbackWarnings,
                 'warning_reason' => $warningReason,
                 'output_payload' => $notFound,
             ],
@@ -320,6 +344,12 @@ class HubspotService extends BaseService
             'message' => 'HubSpot product not found using configured match criteria.',
             'criteria_attempted' => $attempted,
         ];
+    }
+
+    private function shouldCreateProductFallbackAfterResolutionFailure(array $resolved): bool
+    {
+        return ($resolved['match_status'] ?? null) === 'failed'
+            && ($resolved['message'] ?? null) === 'HubSpot product search failed.';
     }
 
     private function resolveExplicitHubspotProductId(array $payload): string
@@ -1695,7 +1725,7 @@ class HubspotService extends BaseService
     }
 
     /**
-     * @param array<string, mixed> $properties
+     * @param  array<string, mixed>  $properties
      * @return array<string, mixed>
      */
     private function applyInvoiceObjectRelationshipMappings(array $properties, array $payload): array

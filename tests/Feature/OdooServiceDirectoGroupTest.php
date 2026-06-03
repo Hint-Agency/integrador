@@ -492,6 +492,68 @@ class OdooServiceDirectoGroupTest extends TestCase
         $this->assertSame('DEAL-901', $result['data']['output_payload'][0]['deal_id']);
     }
 
+    public function test_create_sale_subscription_does_not_send_internal_product_target_id_as_template_id(): void
+    {
+        $platform = $this->jsonRpcPlatform([
+            'odoo' => [
+                'adapter' => 'json_rpc',
+                'models' => [
+                    'sale_subscription' => 'dp.sale.subscription',
+                ],
+            ],
+        ]);
+        $createdPayload = null;
+
+        Http::fake(function ($request) use (&$createdPayload) {
+            if ($request->url() !== 'https://odoo-directo.test/jsonrpc') {
+                return Http::response([], 404);
+            }
+
+            $params = $request->data()['params'] ?? [];
+            if (($params['service'] ?? null) === 'common') {
+                return Http::response(['result' => 7], 200);
+            }
+
+            $args = $params['args'] ?? [];
+            if (($args[3] ?? null) === 'dp.sale.subscription' && ($args[4] ?? null) === 'create') {
+                $createdPayload = $args[5][0] ?? null;
+
+                return Http::response(['result' => 902], 200);
+            }
+
+            return Http::response(['result' => []], 200);
+        });
+
+        $service = app()->make(OdooService::class, [
+            'platform' => $platform,
+        ]);
+
+        $result = $service->createSaleSubscription([
+            'quotes' => [[
+                'quote_id' => 'Q-902',
+                'hubspot_quote_id' => 'HSQ-902',
+                'entity_results' => [
+                    'company' => [
+                        'target_id' => 55,
+                    ],
+                    'products' => [[
+                        'target_id' => 'odoo_product_413207827653_product_1',
+                        'fields' => [
+                            'name' => 'Plan without Odoo product id',
+                            'quantity' => 1,
+                            'price' => 250,
+                        ],
+                    ]],
+                ],
+            ]],
+        ]);
+
+        $this->assertTrue($result['success']);
+        $line = $createdPayload['order_line_ids'][0][2];
+        $this->assertArrayNotHasKey('product_template_id', $line);
+        $this->assertSame('Plan without Odoo product id', $line['name']);
+    }
+
     public function test_create_sale_subscription_sends_dp_subscription_fields_and_address_partners(): void
     {
         $platform = $this->jsonRpcPlatform([

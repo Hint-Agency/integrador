@@ -7,6 +7,7 @@ use App\Models\PropertyRelationship;
 use App\Services\RateLimitService;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 
 class HubspotApiServiceRefactored
@@ -36,6 +37,11 @@ class HubspotApiServiceRefactored
                 'properties' => array_values(array_unique(array_filter($properties, 'is_string'))),
                 'limit' => 100,
             ];
+
+            $sorts = $this->signedQuoteSorts();
+            if ($sorts !== []) {
+                $body['sorts'] = $sorts;
+            }
 
             if ($after !== null) {
                 $body['after'] = $after;
@@ -388,18 +394,15 @@ class HubspotApiServiceRefactored
         }
 
         $lookbackDays = max(1, (int) config('hubspot.signed_quotes.lookback_days', 2));
-        $now = now();
+        $timezone = (string) config('app.timezone', 'UTC');
+        $now = Carbon::now($timezone);
+        $from = $now->copy()->subDays($lookbackDays);
+        $dateProperties = $this->signedQuoteDateProperties();
         $baseFilters = [
             [
                 'propertyName' => $signStatusProperty,
                 'operator' => 'IN',
                 'values' => array_values(array_unique(array_filter($signStatusValues, 'is_string'))),
-            ],
-            [
-                'propertyName' => (string) config('hubspot.signed_quotes.modified_property', 'hs_lastmodifieddate'),
-                'operator' => 'BETWEEN',
-                'value' => (string) $now->copy()->subDays($lookbackDays)->getTimestampMs(),
-                'highValue' => (string) $now->getTimestampMs(),
             ],
             [
                 'propertyName' => (string) config('hubspot.signed_quotes.archived_property', 'hs_archived'),
@@ -413,25 +416,70 @@ class HubspotApiServiceRefactored
             $syncedStatuses = ['success', 'already_exists'];
         }
 
-        return [
+        $syncFilters = [
             [
-                'filters' => [
-                    ...$baseFilters,
-                    [
-                        'propertyName' => $syncStatusProperty,
-                        'operator' => 'NOT_HAS_PROPERTY',
-                    ],
-                ],
+                'propertyName' => $syncStatusProperty,
+                'operator' => 'NOT_HAS_PROPERTY',
             ],
             [
-                'filters' => [
-                    ...$baseFilters,
-                    [
-                        'propertyName' => $syncStatusProperty,
-                        'operator' => 'NOT_IN',
-                        'values' => array_values(array_unique(array_filter($syncedStatuses, 'is_string'))),
+                'propertyName' => $syncStatusProperty,
+                'operator' => 'NOT_IN',
+                'values' => array_values(array_unique(array_filter($syncedStatuses, 'is_string'))),
+            ],
+        ];
+
+        $filterGroups = [];
+        foreach ($dateProperties as $dateProperty) {
+            $dateFilter = [
+                'propertyName' => $dateProperty,
+                'operator' => 'BETWEEN',
+                'value' => $from->getTimestampMs(),
+                'highValue' => $now->getTimestampMs(),
+            ];
+
+            foreach ($syncFilters as $syncFilter) {
+                $filterGroups[] = [
+                    'filters' => [
+                        ...$baseFilters,
+                        $dateFilter,
+                        $syncFilter,
                     ],
-                ],
+                ];
+            }
+        }
+
+        return $filterGroups;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function signedQuoteDateProperties(): array
+    {
+        $properties = config('hubspot.signed_quotes.date_properties');
+        if (! is_array($properties) || $properties === []) {
+            $properties = [
+                config('hubspot.signed_quotes.modified_property', 'hs_lastmodifieddate'),
+            ];
+        }
+
+        return array_values(array_unique(array_filter($properties, 'is_string')));
+    }
+
+    /**
+     * @return list<array{propertyName:string,direction:string}>
+     */
+    private function signedQuoteSorts(): array
+    {
+        $sortProperty = $this->signedQuoteDateProperties()[0] ?? null;
+        if (! is_string($sortProperty) || trim($sortProperty) === '') {
+            return [];
+        }
+
+        return [
+            [
+                'propertyName' => $sortProperty,
+                'direction' => 'DESCENDING',
             ],
         ];
     }

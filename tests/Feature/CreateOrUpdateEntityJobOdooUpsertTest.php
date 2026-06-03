@@ -202,8 +202,11 @@ class CreateOrUpdateEntityJobOdooUpsertTest extends TestCase
         $record->refresh();
 
         $this->assertSame('error', $record->status);
+        $this->assertSame('all_quotes_blocked_before_subscription_creation', data_get($record->details, 'reason'));
         $this->assertSame(1, data_get($record->details, 'blocked_count'));
         $this->assertSame('company_odoo_upsert_failed', data_get($record->details, 'blocked_quotes.0.reason'));
+        $this->assertSame('company_odoo_upsert_failed', data_get($record->details, 'blocked_summary.0.reason'));
+        $this->assertSame('Odoo company creation failed.', data_get($record->details, 'blocked_summary.0.message'));
 
         Queue::assertNotPushed(ResolveAssociationsJob::class);
     }
