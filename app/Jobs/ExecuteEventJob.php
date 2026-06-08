@@ -6,6 +6,7 @@ use App\Models\Event;
 use App\Models\Record;
 use App\Services\EventLoggingService;
 use App\Services\EventProcessingService;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Bus\Queueable;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -15,18 +16,24 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use App\Jobs\ProcessNextEventJob;
 
-class ExecuteEventJob implements ShouldQueue
+class ExecuteEventJob implements ShouldQueue, ShouldBeUnique
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
     public int $backoff = 30;
     public int $timeout = 300;
+    public int $uniqueFor = 3600;
 
     public function __construct(
         public Event $event
     ) {
         $this->onQueue('events');
+    }
+
+    public function uniqueId(): string
+    {
+        return 'event:'.$this->event->id;
     }
 
     public function handle(EventLoggingService $eventLoggingService, EventProcessingService $eventProcessingService): void

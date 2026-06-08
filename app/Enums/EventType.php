@@ -6,6 +6,8 @@ enum EventType: string
 {
     case COMPANY_CREATED = 'company.created';
     case COMPANY_UPDATED = 'company.updated';
+    case CONTACT_CREATED = 'contact.created';
+    case CONTACT_UPDATED = 'contact.updated';
     case PRODUCT_CREATED = 'product.created';
     case PRODUCT_UPDATED = 'product.updated';
     case INVOICE_CREATED = 'invoice.created';
@@ -24,6 +26,8 @@ enum EventType: string
     case AZURE_SQL_PRODUCTS_SYNC = 'azure_sql.products.sync';
     case AZURE_SQL_ACCOUNTS_SYNC = 'azure_sql.accounts.sync';
     case AZURE_SQL_CONTACTS_SYNC = 'azure_sql.contacts.sync';
+    case AZURE_SQL_CUSTOMER_UPDATE = 'azure_sql.customer.update';
+    case AZURE_SQL_CONTACT_UPDATE = 'azure_sql.contact.update';
     case NEXT_EVENT = 'next.event';
     case GENERIC_EXTERNAL_CALL = 'generic.external.call';
 
@@ -32,6 +36,8 @@ enum EventType: string
         return match ($this) {
             self::COMPANY_CREATED => 'Empresa creada',
             self::COMPANY_UPDATED => 'Empresa actualizada',
+            self::CONTACT_CREATED => 'Contacto creado',
+            self::CONTACT_UPDATED => 'Contacto actualizado',
             self::PRODUCT_CREATED => 'Producto creado',
             self::PRODUCT_UPDATED => 'Producto actualizado',
             self::INVOICE_CREATED => 'Factura creada',
@@ -50,6 +56,8 @@ enum EventType: string
             self::AZURE_SQL_PRODUCTS_SYNC => 'Sincronización de productos Azure SQL',
             self::AZURE_SQL_ACCOUNTS_SYNC => 'Sincronización de cuentas Azure SQL',
             self::AZURE_SQL_CONTACTS_SYNC => 'Sincronización de contactos Azure SQL',
+            self::AZURE_SQL_CUSTOMER_UPDATE => 'Actualización de cliente Azure SQL',
+            self::AZURE_SQL_CONTACT_UPDATE => 'Actualización de contacto Azure SQL',
             self::NEXT_EVENT => 'Siguiente evento',
             self::GENERIC_EXTERNAL_CALL => 'Llamada HTTP genérica',
         };
@@ -60,6 +68,8 @@ enum EventType: string
         return match ($this) {
             self::COMPANY_CREATED => 'Crea o reenvía una empresa dentro del flujo de integración.',
             self::COMPANY_UPDATED => 'Actualiza una empresa en la plataforma destino.',
+            self::CONTACT_CREATED => 'Crea o reenvía un contacto dentro del flujo de integración.',
+            self::CONTACT_UPDATED => 'Actualiza un contacto en la plataforma destino.',
             self::PRODUCT_CREATED => 'Crea un producto en la plataforma destino.',
             self::PRODUCT_UPDATED => 'Actualiza un producto existente en la plataforma destino.',
             self::INVOICE_CREATED => 'Crea o sincroniza una factura u objeto de facturación posterior.',
@@ -78,6 +88,8 @@ enum EventType: string
             self::AZURE_SQL_PRODUCTS_SYNC => 'Lee productos desde Azure SQL y actualiza productos HubSpot existentes.',
             self::AZURE_SQL_ACCOUNTS_SYNC => 'Lee cuentas/clientes desde Azure SQL y actualiza empresas HubSpot existentes.',
             self::AZURE_SQL_CONTACTS_SYNC => 'Lee contactos desde Azure SQL y reconcilia contactos HubSpot existentes.',
+            self::AZURE_SQL_CUSTOMER_UPDATE => 'Actualiza columnas permitidas en custtable usando un payload mapeado.',
+            self::AZURE_SQL_CONTACT_UPDATE => 'Actualiza columnas permitidas en contactos_cl usando un payload mapeado.',
             self::NEXT_EVENT => 'Evento interno de control para continuar un pipeline.',
             self::GENERIC_EXTERNAL_CALL => 'Ejecuta una llamada HTTP para una plataforma genérica sin SDK.',
         };
@@ -95,7 +107,9 @@ enum EventType: string
             self::ODOO_GET_STORE_PRODUCTS => 'Sincronización Odoo',
             self::AZURE_SQL_PRODUCTS_SYNC,
             self::AZURE_SQL_ACCOUNTS_SYNC,
-            self::AZURE_SQL_CONTACTS_SYNC => 'Sincronización Azure SQL',
+            self::AZURE_SQL_CONTACTS_SYNC,
+            self::AZURE_SQL_CUSTOMER_UPDATE,
+            self::AZURE_SQL_CONTACT_UPDATE => 'Sincronización Azure SQL',
             self::GENERIC_EXTERNAL_CALL => 'HTTP genérico',
             self::NEXT_EVENT => 'Control de flujo',
             default => 'Eventos principales',
@@ -117,7 +131,9 @@ enum EventType: string
             self::ODOO_GET_STORE_PRODUCTS => ['odoo'],
             self::AZURE_SQL_PRODUCTS_SYNC,
             self::AZURE_SQL_ACCOUNTS_SYNC,
-            self::AZURE_SQL_CONTACTS_SYNC => ['generic'],
+            self::AZURE_SQL_CONTACTS_SYNC,
+            self::AZURE_SQL_CUSTOMER_UPDATE,
+            self::AZURE_SQL_CONTACT_UPDATE => ['generic'],
             self::GENERIC_EXTERNAL_CALL => ['generic'],
             default => ['*'],
         };
@@ -139,6 +155,8 @@ enum EventType: string
         return match ($this) {
             self::COMPANY_CREATED => \App\Events\Company\CreateCompanyEvent::class,
             self::COMPANY_UPDATED => \App\Events\Company\UpdateCompanyEvent::class,
+            self::CONTACT_CREATED => \App\Events\Contact\CreateContactEvent::class,
+            self::CONTACT_UPDATED => \App\Events\Contact\UpdateContactEvent::class,
             self::PRODUCT_CREATED => \App\Events\Product\CreateProductEvent::class,
             self::PRODUCT_UPDATED => \App\Events\Product\UpdateProductEvent::class,
             self::INVOICE_CREATED => \App\Events\Invoice\CreateInvoiceEvent::class,
@@ -157,6 +175,8 @@ enum EventType: string
             self::AZURE_SQL_PRODUCTS_SYNC => \App\Events\Object\UpdateObjectEvent::class,
             self::AZURE_SQL_ACCOUNTS_SYNC => \App\Events\Object\UpdateObjectEvent::class,
             self::AZURE_SQL_CONTACTS_SYNC => \App\Events\Object\UpdateObjectEvent::class,
+            self::AZURE_SQL_CUSTOMER_UPDATE => \App\Events\Object\UpdateObjectEvent::class,
+            self::AZURE_SQL_CONTACT_UPDATE => \App\Events\Object\UpdateObjectEvent::class,
             self::NEXT_EVENT => \App\Events\NextEvent::class,
             self::GENERIC_EXTERNAL_CALL => \App\Events\Generic\ExternalCallEvent::class,
         };

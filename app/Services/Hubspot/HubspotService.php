@@ -1138,7 +1138,140 @@ class HubspotService extends BaseService
 
     public function updateCompany(array $payload): array
     {
-        $companyId = (string) ($payload['id'] ?? $payload['hubspot_id'] ?? '');
+        if (array_is_list($payload)) {
+            return $this->updateCompanies($payload);
+        }
+
+        return $this->updateSingleCompany($payload);
+    }
+
+    private function updateCompanies(array $payload): array
+    {
+        $updated = [];
+        $notFound = [];
+        $errors = [];
+        $nextEventConfigured = $this->event?->to_event_id !== null;
+
+        foreach ($payload as $index => $item) {
+            if (! is_array($item)) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => 'Invalid company payload.',
+                ];
+
+                continue;
+            }
+
+            $result = $this->updateSingleCompany($item);
+            if (! ($result['success'] ?? false)) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => $result['message'] ?? 'Company update failed.',
+                    'details' => $result['data'] ?? [],
+                ];
+
+                continue;
+            }
+
+            if (data_get($result, 'data.operation') === 'not_found') {
+                $notFound[] = data_get($result, 'data.output_payload', $item);
+
+                continue;
+            }
+
+            $updated[] = $result['data'] ?? [];
+        }
+
+        $warningReason = null;
+        if (! empty($notFound) && ! $nextEventConfigured) {
+            $warningReason = 'missing_create_fallback_event';
+        }
+
+        return [
+            'success' => empty($errors) || ! empty($updated) || ! empty($notFound),
+            'status' => (! empty($errors) || $warningReason !== null) ? 'warning' : null,
+            'message' => $this->buildCompanyUpdateMessage($updated, $notFound, $errors, $warningReason),
+            'data' => [
+                'operation' => 'batch_update',
+                'updated_count' => count($updated),
+                'error_count' => count($errors),
+                'not_found_count' => count($notFound),
+                'warning_reason' => $warningReason,
+                'updated_companies' => $updated,
+                'errors' => $errors,
+                'output_payload' => $notFound,
+            ],
+        ];
+    }
+
+    private function updateSingleCompany(array $payload): array
+    {
+        $normalizedPayload = $this->normalizeCompanyPayload($payload);
+        $companyId = $this->resolveExplicitHubspotCompanyId($normalizedPayload);
+
+        if ($companyId === '') {
+            $resolved = $this->resolveHubspotCompanyId($normalizedPayload);
+
+            if (($resolved['match_status'] ?? null) === 'not_found') {
+                $nextEventConfigured = $this->event?->to_event_id !== null;
+                $warningReason = $nextEventConfigured ? null : 'missing_create_fallback_event';
+
+                return [
+                    'success' => true,
+                    'status' => $warningReason ? 'warning' : null,
+                    'message' => $warningReason
+                        ? 'Company was not found in HubSpot and no creation fallback event is configured.'
+                        : 'Company prepared for HubSpot creation fallback.',
+                    'data' => [
+                        'operation' => 'not_found',
+                        'updated_count' => 0,
+                        'not_found_count' => 1,
+                        'warning_reason' => $warningReason,
+                        'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                        'output_payload' => $normalizedPayload,
+                    ],
+                ];
+            }
+
+            if (($resolved['success'] ?? false) !== true) {
+                $nextEventConfigured = $this->event?->to_event_id !== null;
+                if ($nextEventConfigured && $this->shouldCreateCompanyFallbackAfterResolutionFailure($resolved)) {
+                    $fallbackPayload = $normalizedPayload;
+                    $fallbackPayload['_resolution_warning'] = [
+                        'reason' => 'hubspot_company_search_failed_create_fallback',
+                        'message' => $resolved['message'] ?? 'HubSpot company search failed.',
+                        'error' => $resolved['error'] ?? null,
+                        'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                    ];
+
+                    return [
+                        'success' => true,
+                        'message' => 'Company prepared for HubSpot creation fallback after search failure.',
+                        'data' => [
+                            'operation' => 'not_found',
+                            'updated_count' => 0,
+                            'not_found_count' => 1,
+                            'warning_reason' => null,
+                            'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                            'search_failure' => $resolved['error'] ?? null,
+                            'output_payload' => $fallbackPayload,
+                        ],
+                    ];
+                }
+
+                return [
+                    'success' => false,
+                    'message' => $resolved['message'] ?? 'Unable to resolve HubSpot company id.',
+                    'data' => [
+                        'error' => $resolved['error'] ?? null,
+                        'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                    ],
+                ];
+            }
+
+            $companyId = (string) ($resolved['hubspot_id'] ?? '');
+        }
+
         if ($companyId === '') {
             return [
                 'success' => false,
@@ -1147,8 +1280,16 @@ class HubspotService extends BaseService
             ];
         }
 
-        $properties = $payload;
-        unset($properties['id'], $properties['hubspot_id']);
+        $properties = $this->hubspotCompanyProperties($normalizedPayload);
+        if ($properties === []) {
+            return [
+                'success' => false,
+                'message' => 'No company properties received for HubSpot update.',
+                'data' => [
+                    'company_id' => $companyId,
+                ],
+            ];
+        }
 
         $response = $this->hubspotApi->updateObject('companies', $companyId, $properties);
         if (! $response['success']) {
@@ -1159,7 +1300,707 @@ class HubspotService extends BaseService
             ];
         }
 
-        return $this->success('Company updated in HubSpot.', $response['data']);
+        return $this->success('Company updated in HubSpot.', [
+            'operation' => 'updated',
+            'updated_count' => 1,
+            'not_found_count' => 0,
+            'company_id' => $companyId,
+            'updated_properties' => $properties,
+            'hubspot_response' => $response['data'] ?? [],
+            'output_payload' => [],
+        ]);
+    }
+
+    private function shouldCreateCompanyFallbackAfterResolutionFailure(array $resolved): bool
+    {
+        return ($resolved['match_status'] ?? null) === 'failed'
+            && ($resolved['message'] ?? null) === 'HubSpot company search failed.';
+    }
+
+    private function buildCompanyUpdateMessage(array $updated, array $notFound, array $errors, ?string $warningReason): string
+    {
+        if ($warningReason === 'missing_create_fallback_event') {
+            return 'Some companies were not found in HubSpot and no creation fallback event is configured.';
+        }
+
+        if (! empty($errors) && ! empty($updated)) {
+            return 'Some companies failed to update in HubSpot.';
+        }
+
+        if (! empty($errors) && empty($updated) && empty($notFound)) {
+            return 'Companies could not be updated in HubSpot.';
+        }
+
+        if (! empty($notFound) && empty($updated)) {
+            return 'Companies prepared for HubSpot creation fallback.';
+        }
+
+        if (! empty($notFound)) {
+            return 'Some companies were updated and others prepared for HubSpot creation fallback.';
+        }
+
+        return 'Companies updated in HubSpot.';
+    }
+
+    public function createCompany(array $payload): array
+    {
+        $items = array_is_list($payload) ? $payload : [$payload];
+        $created = [];
+        $errors = [];
+
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => 'Invalid company payload.',
+                ];
+
+                continue;
+            }
+
+            $normalizedPayload = $this->normalizeCompanyPayload($item);
+            $properties = $this->hubspotCompanyProperties($normalizedPayload);
+
+            if ($properties === []) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => 'No company properties received for HubSpot creation.',
+                    'received_keys' => array_keys($item),
+                ];
+
+                continue;
+            }
+
+            $response = $this->hubspotApi->createObject('companies', $properties);
+            if (! $response['success']) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => $response['error'] ?? $response['message'] ?? 'Unknown error',
+                    'attempted_properties' => $properties,
+                ];
+
+                continue;
+            }
+
+            $created[] = [
+                'company_id' => Arr::get($response, 'data.id'),
+                'properties' => $properties,
+                'hubspot_response' => $response['data'] ?? [],
+            ];
+        }
+
+        return [
+            'success' => empty($errors) || ! empty($created),
+            'status' => empty($errors) ? null : 'warning',
+            'message' => empty($errors)
+                ? 'Companies created in HubSpot.'
+                : (! empty($created) ? 'Some companies failed to create in HubSpot.' : 'Companies could not be created in HubSpot.'),
+            'data' => [
+                'operation' => 'created',
+                'created_count' => count($created),
+                'error_count' => count($errors),
+                'company_id' => $created[0]['company_id'] ?? null,
+                'created_companies' => $created,
+                'created_properties' => $created[0]['properties'] ?? [],
+                'hubspot_response' => $created[0]['hubspot_response'] ?? [],
+                'errors' => $errors,
+                'output_payload' => [],
+            ],
+        ];
+    }
+
+    private function normalizeCompanyPayload(array $payload): array
+    {
+        $properties = Arr::get($payload, 'properties');
+
+        if (is_array($properties)) {
+            return array_merge(
+                array_diff_key($payload, ['properties' => true]),
+                $properties
+            );
+        }
+
+        return $payload;
+    }
+
+    private function resolveExplicitHubspotCompanyId(array $payload): string
+    {
+        $id = $this->resolveScalarPayloadValue([
+            Arr::get($payload, 'hubspot_company_id'),
+            Arr::get($payload, 'company.hubspot_id'),
+            Arr::get($payload, 'company.id'),
+            Arr::get($payload, 'hubspot_object_id'),
+            Arr::get($payload, 'hubspot_id'),
+            Arr::get($payload, 'hs_object_id'),
+            Arr::get($payload, 'objectId'),
+            Arr::get($payload, 'id'),
+        ]);
+
+        return $id ?? '';
+    }
+
+    private function resolveHubspotCompanyId(array $payload): array
+    {
+        $properties = $this->hubspotCompanyProperties($payload);
+        $criteria = $this->hubspotCompanyMatchCriteria($payload);
+        $attempted = [];
+
+        foreach ($criteria as $criterion) {
+            $property = (string) ($criterion['property'] ?? '');
+            $value = $criterion['value'] ?? null;
+
+            if ($property === '' || $value === null) {
+                continue;
+            }
+
+            $attempted[] = [
+                'property' => $property,
+                'value' => $value,
+            ];
+
+            $response = $this->hubspotApi->searchObjectByProperty(
+                'companies',
+                $property,
+                $value,
+                array_values(array_unique(array_filter([...array_keys($properties), $property], 'is_string')))
+            );
+
+            if (! ($response['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'match_status' => 'failed',
+                    'message' => 'HubSpot company search failed.',
+                    'criteria_attempted' => $attempted,
+                    'error' => $response['error'] ?? null,
+                ];
+            }
+
+            $results = Arr::get($response, 'data.results', []);
+            if (! is_array($results) || count($results) === 0) {
+                continue;
+            }
+
+            if (count($results) > 1) {
+                return [
+                    'success' => false,
+                    'match_status' => 'failed',
+                    'message' => 'Multiple HubSpot companies matched the provided identifiers.',
+                    'criteria_attempted' => $attempted,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'match_status' => 'matched',
+                'hubspot_id' => (string) Arr::get($results, '0.id'),
+                'matched_by' => $property,
+                'criteria_attempted' => $attempted,
+            ];
+        }
+
+        return [
+            'success' => false,
+            'match_status' => 'not_found',
+            'message' => 'HubSpot company not found using configured match criteria.',
+            'criteria_attempted' => $attempted,
+        ];
+    }
+
+    /**
+     * @return list<array{property:string,value:string}>
+     */
+    private function hubspotCompanyMatchCriteria(array $payload): array
+    {
+        $configured = Arr::wrap($this->event?->meta['company_match_properties'] ?? []);
+        $properties = $configured !== []
+            ? array_values(array_filter($configured, 'is_string'))
+            : [
+                'identificador_db',
+                'codigo_unico_por_cuenta',
+                'rfc',
+                'rfc_o_identificacion_fiscal',
+                'domain',
+                'website',
+                'phone',
+                'email',
+            ];
+
+        $criteria = [];
+        foreach ($properties as $property) {
+            $value = $this->resolveScalarPayloadValue([
+                Arr::get($payload, $property),
+                Arr::get($payload, 'company.'.$property),
+            ]);
+
+            if ($value !== null) {
+                $criteria[] = [
+                    'property' => $property,
+                    'value' => $value,
+                ];
+            }
+        }
+
+        return $criteria;
+    }
+
+    /**
+     * @return array<string, string|int|float|bool>
+     */
+    private function hubspotCompanyProperties(array $payload): array
+    {
+        $properties = [];
+        $technicalKeys = [
+            'id',
+            'hubspot_id',
+            'hubspot_company_id',
+            'hubspot_object_id',
+            'hubspot_object_type',
+            'hubspot_object',
+            'hs_object_id',
+            'objectId',
+            'company',
+            'properties',
+            '_event_metadata',
+            '_resolution_warning',
+        ];
+
+        foreach ($payload as $key => $value) {
+            if (! is_string($key) || in_array($key, $technicalKeys, true)) {
+                continue;
+            }
+
+            if (! is_scalar($value) || $value === '') {
+                continue;
+            }
+
+            $properties[$key] = $value;
+        }
+
+        return $properties;
+    }
+
+    public function updateContact(array $payload): array
+    {
+        if (array_is_list($payload)) {
+            return $this->updateContacts($payload);
+        }
+
+        return $this->updateSingleContact($payload);
+    }
+
+    private function updateContacts(array $payload): array
+    {
+        $updated = [];
+        $notFound = [];
+        $errors = [];
+        $nextEventConfigured = $this->event?->to_event_id !== null;
+
+        foreach ($payload as $index => $item) {
+            if (! is_array($item)) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => 'Invalid contact payload.',
+                ];
+
+                continue;
+            }
+
+            $result = $this->updateSingleContact($item);
+            if (! ($result['success'] ?? false)) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => $result['message'] ?? 'Contact update failed.',
+                    'details' => $result['data'] ?? [],
+                ];
+
+                continue;
+            }
+
+            if (data_get($result, 'data.operation') === 'not_found') {
+                $notFound[] = data_get($result, 'data.output_payload', $item);
+
+                continue;
+            }
+
+            $updated[] = $result['data'] ?? [];
+        }
+
+        $warningReason = null;
+        if (! empty($notFound) && ! $nextEventConfigured) {
+            $warningReason = 'missing_create_fallback_event';
+        }
+
+        return [
+            'success' => empty($errors) || ! empty($updated) || ! empty($notFound),
+            'status' => (! empty($errors) || $warningReason !== null) ? 'warning' : null,
+            'message' => $this->buildContactUpdateMessage($updated, $notFound, $errors, $warningReason),
+            'data' => [
+                'operation' => 'batch_update',
+                'updated_count' => count($updated),
+                'error_count' => count($errors),
+                'not_found_count' => count($notFound),
+                'warning_reason' => $warningReason,
+                'updated_contacts' => $updated,
+                'errors' => $errors,
+                'output_payload' => $notFound,
+            ],
+        ];
+    }
+
+    private function updateSingleContact(array $payload): array
+    {
+        $normalizedPayload = $this->normalizeContactPayload($payload);
+        $contactId = $this->resolveHubspotContactIdFromPayload($normalizedPayload) ?? '';
+
+        if ($contactId === '') {
+            $resolved = $this->resolveHubspotContactId($normalizedPayload);
+
+            if (($resolved['match_status'] ?? null) === 'not_found') {
+                $nextEventConfigured = $this->event?->to_event_id !== null;
+                $warningReason = $nextEventConfigured ? null : 'missing_create_fallback_event';
+
+                return [
+                    'success' => true,
+                    'status' => $warningReason ? 'warning' : null,
+                    'message' => $warningReason
+                        ? 'Contact was not found in HubSpot and no creation fallback event is configured.'
+                        : 'Contact prepared for HubSpot creation fallback.',
+                    'data' => [
+                        'operation' => 'not_found',
+                        'updated_count' => 0,
+                        'not_found_count' => 1,
+                        'warning_reason' => $warningReason,
+                        'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                        'output_payload' => $normalizedPayload,
+                    ],
+                ];
+            }
+
+            if (($resolved['success'] ?? false) !== true) {
+                $nextEventConfigured = $this->event?->to_event_id !== null;
+                if ($nextEventConfigured && $this->shouldCreateContactFallbackAfterResolutionFailure($resolved)) {
+                    $fallbackPayload = $normalizedPayload;
+                    $fallbackPayload['_resolution_warning'] = [
+                        'reason' => 'hubspot_contact_search_failed_create_fallback',
+                        'message' => $resolved['message'] ?? 'HubSpot contact search failed.',
+                        'error' => $resolved['error'] ?? null,
+                        'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                    ];
+
+                    return [
+                        'success' => true,
+                        'message' => 'Contact prepared for HubSpot creation fallback after search failure.',
+                        'data' => [
+                            'operation' => 'not_found',
+                            'updated_count' => 0,
+                            'not_found_count' => 1,
+                            'warning_reason' => null,
+                            'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                            'search_failure' => $resolved['error'] ?? null,
+                            'output_payload' => $fallbackPayload,
+                        ],
+                    ];
+                }
+
+                return [
+                    'success' => false,
+                    'message' => $resolved['message'] ?? 'Unable to resolve HubSpot contact id.',
+                    'data' => [
+                        'error' => $resolved['error'] ?? null,
+                        'criteria_attempted' => $resolved['criteria_attempted'] ?? [],
+                    ],
+                ];
+            }
+
+            $contactId = (string) ($resolved['hubspot_id'] ?? '');
+        }
+
+        if ($contactId === '') {
+            return [
+                'success' => false,
+                'message' => 'Missing contact id for HubSpot update.',
+                'data' => [],
+            ];
+        }
+
+        $properties = $this->hubspotContactProperties($normalizedPayload);
+        if ($properties === []) {
+            return [
+                'success' => false,
+                'message' => 'No contact properties received for HubSpot update.',
+                'data' => [
+                    'contact_id' => $contactId,
+                ],
+            ];
+        }
+
+        $response = $this->hubspotApi->updateObject('contacts', $contactId, $properties);
+        if (! $response['success']) {
+            return [
+                'success' => false,
+                'message' => 'Failed to update contact in HubSpot.',
+                'data' => ['error' => $response['error'] ?? null],
+            ];
+        }
+
+        return $this->success('Contact updated in HubSpot.', [
+            'operation' => 'updated',
+            'updated_count' => 1,
+            'not_found_count' => 0,
+            'contact_id' => $contactId,
+            'updated_properties' => $properties,
+            'hubspot_response' => $response['data'] ?? [],
+            'output_payload' => [],
+        ]);
+    }
+
+    private function shouldCreateContactFallbackAfterResolutionFailure(array $resolved): bool
+    {
+        return ($resolved['match_status'] ?? null) === 'failed'
+            && ($resolved['message'] ?? null) === 'HubSpot contact search failed.';
+    }
+
+    private function buildContactUpdateMessage(array $updated, array $notFound, array $errors, ?string $warningReason): string
+    {
+        if ($warningReason === 'missing_create_fallback_event') {
+            return 'Some contacts were not found in HubSpot and no creation fallback event is configured.';
+        }
+
+        if (! empty($errors) && ! empty($updated)) {
+            return 'Some contacts failed to update in HubSpot.';
+        }
+
+        if (! empty($errors) && empty($updated) && empty($notFound)) {
+            return 'Contacts could not be updated in HubSpot.';
+        }
+
+        if (! empty($notFound) && empty($updated)) {
+            return 'Contacts prepared for HubSpot creation fallback.';
+        }
+
+        if (! empty($notFound)) {
+            return 'Some contacts were updated and others prepared for HubSpot creation fallback.';
+        }
+
+        return 'Contacts updated in HubSpot.';
+    }
+
+    public function createContact(array $payload): array
+    {
+        $items = array_is_list($payload) ? $payload : [$payload];
+        $created = [];
+        $errors = [];
+
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => 'Invalid contact payload.',
+                ];
+
+                continue;
+            }
+
+            $normalizedPayload = $this->normalizeContactPayload($item);
+            $properties = $this->hubspotContactProperties($normalizedPayload);
+
+            if ($properties === []) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => 'No contact properties received for HubSpot creation.',
+                    'received_keys' => array_keys($item),
+                ];
+
+                continue;
+            }
+
+            $response = $this->hubspotApi->createObject('contacts', $properties);
+            if (! $response['success']) {
+                $errors[] = [
+                    'index' => $index,
+                    'error' => $response['error'] ?? $response['message'] ?? 'Unknown error',
+                    'attempted_properties' => $properties,
+                ];
+
+                continue;
+            }
+
+            $created[] = [
+                'contact_id' => Arr::get($response, 'data.id'),
+                'properties' => $properties,
+                'hubspot_response' => $response['data'] ?? [],
+            ];
+        }
+
+        return [
+            'success' => empty($errors) || ! empty($created),
+            'status' => empty($errors) ? null : 'warning',
+            'message' => empty($errors)
+                ? 'Contacts created in HubSpot.'
+                : (! empty($created) ? 'Some contacts failed to create in HubSpot.' : 'Contacts could not be created in HubSpot.'),
+            'data' => [
+                'operation' => 'created',
+                'created_count' => count($created),
+                'error_count' => count($errors),
+                'contact_id' => $created[0]['contact_id'] ?? null,
+                'created_contacts' => $created,
+                'created_properties' => $created[0]['properties'] ?? [],
+                'hubspot_response' => $created[0]['hubspot_response'] ?? [],
+                'errors' => $errors,
+                'output_payload' => [],
+            ],
+        ];
+    }
+
+    private function normalizeContactPayload(array $payload): array
+    {
+        $properties = Arr::get($payload, 'properties');
+
+        if (is_array($properties)) {
+            return array_merge(
+                array_diff_key($payload, ['properties' => true]),
+                $properties
+            );
+        }
+
+        return $payload;
+    }
+
+    private function resolveHubspotContactId(array $payload): array
+    {
+        $properties = $this->hubspotContactProperties($payload);
+        $criteria = $this->hubspotContactMatchCriteria($payload);
+        $attempted = [];
+
+        foreach ($criteria as $criterion) {
+            $property = (string) ($criterion['property'] ?? '');
+            $value = $criterion['value'] ?? null;
+
+            if ($property === '' || $value === null) {
+                continue;
+            }
+
+            $attempted[] = [
+                'property' => $property,
+                'value' => $value,
+            ];
+
+            $response = $this->hubspotApi->searchObjectByProperty(
+                'contacts',
+                $property,
+                $value,
+                array_values(array_unique(array_filter([...array_keys($properties), $property], 'is_string')))
+            );
+
+            if (! ($response['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'match_status' => 'failed',
+                    'message' => 'HubSpot contact search failed.',
+                    'criteria_attempted' => $attempted,
+                    'error' => $response['error'] ?? null,
+                ];
+            }
+
+            $results = Arr::get($response, 'data.results', []);
+            if (! is_array($results) || count($results) === 0) {
+                continue;
+            }
+
+            if (count($results) > 1) {
+                return [
+                    'success' => false,
+                    'match_status' => 'failed',
+                    'message' => 'Multiple HubSpot contacts matched the provided identifiers.',
+                    'criteria_attempted' => $attempted,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'match_status' => 'matched',
+                'hubspot_id' => (string) Arr::get($results, '0.id'),
+                'matched_by' => $property,
+                'criteria_attempted' => $attempted,
+            ];
+        }
+
+        return [
+            'success' => false,
+            'match_status' => 'not_found',
+            'message' => 'HubSpot contact not found using configured match criteria.',
+            'criteria_attempted' => $attempted,
+        ];
+    }
+
+    /**
+     * @return list<array{property:string,value:string}>
+     */
+    private function hubspotContactMatchCriteria(array $payload): array
+    {
+        $configured = Arr::wrap($this->event?->meta['contact_match_properties'] ?? []);
+        $properties = $configured !== []
+            ? array_values(array_filter($configured, 'is_string'))
+            : [
+                'identificador_db',
+                'codigo_unico_por_cuenta',
+                'clave',
+                'phone',
+                'email',
+            ];
+
+        $criteria = [];
+        foreach ($properties as $property) {
+            $value = $this->resolveScalarPayloadValue([
+                Arr::get($payload, $property),
+                Arr::get($payload, 'contact.'.$property),
+            ]);
+
+            if ($value !== null) {
+                $criteria[] = [
+                    'property' => $property,
+                    'value' => $value,
+                ];
+            }
+        }
+
+        return $criteria;
+    }
+
+    /**
+     * @return array<string, string|int|float|bool>
+     */
+    private function hubspotContactProperties(array $payload): array
+    {
+        $properties = [];
+        $technicalKeys = [
+            'id',
+            'hubspot_id',
+            'hubspot_contact_id',
+            'hubspot_object_id',
+            'hubspot_object_type',
+            'hubspot_object',
+            'hs_object_id',
+            'objectId',
+            'contact',
+            'properties',
+            '_event_metadata',
+            '_resolution_warning',
+        ];
+
+        foreach ($payload as $key => $value) {
+            if (! is_string($key) || in_array($key, $technicalKeys, true)) {
+                continue;
+            }
+
+            if (! is_scalar($value) || $value === '') {
+                continue;
+            }
+
+            $properties[$key] = $value;
+        }
+
+        return $properties;
     }
 
     public function syncContactExecutionResponse(array $payload): array

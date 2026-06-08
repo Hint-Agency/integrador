@@ -97,6 +97,10 @@ class Event extends Model
         $mappedCoreMethod = match ($eventTypeId) {
             'product.updated' => 'updateProducts',
             'product.created' => 'createProducts',
+            'contact.updated' => 'updateContact',
+            'contact.created' => 'createContact',
+            'azure_sql.customer.update' => 'updateCustomer',
+            'azure_sql.contact.update' => 'updateContact',
             default => null,
         };
 

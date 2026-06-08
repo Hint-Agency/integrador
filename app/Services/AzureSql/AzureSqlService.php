@@ -48,10 +48,21 @@ class AzureSqlService extends BaseService
             'Empleado_responsable',
             'address',
             'RNC',
+            'modifieddatetime',
         ],
         'contactos_cl' => [
             'accountnum',
+            'modifieddatetime',
         ],
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    private const MODIFIED_FILTER_COLUMNS = [
+        'inventtable' => 'modifieddatetime',
+        'custtable' => 'modifieddatetime',
+        'contactos_cl' => 'modifieddatetime',
     ];
 
     /**
@@ -66,6 +77,37 @@ class AzureSqlService extends BaseService
         ],
         'custtable' => [],
         'contactos_cl' => [],
+    ];
+
+    /**
+     * @var array<string, list<string>>
+     */
+    private const WRITABLE_COLUMNS = [
+        'custtable' => [
+            'custname',
+            'Cadenas_Empresas',
+            'Segmen ID',
+            'Sub-Segmen ID',
+            'Telefono',
+            'Correo',
+            'Equipo_Ventas',
+            'Sales District ID',
+            'Empleado_responsable',
+            'address',
+            'RNC',
+        ],
+        'contactos_cl' => [
+            'locator',
+            'Tipo',
+        ],
+    ];
+
+    /**
+     * @var array<string, list<string>>
+     */
+    private const DEFAULT_KEY_COLUMNS = [
+        'custtable' => ['accountnum'],
+        'contactos_cl' => ['accountnum', 'Tipo'],
     ];
 
     public function __construct(
@@ -112,12 +154,10 @@ class AzureSqlService extends BaseService
 
     public function syncProducts(array $payload = []): array
     {
-        $defaultQuery = $this->buildProductsDefaultQuery($payload);
-
         return $this->syncTable(
             table: 'inventtable',
             hubspotObjectType: 'products',
-            defaultQuery: $defaultQuery,
+            defaultQuery: $this->buildModifiedDatetimeDefaultQuery('inventtable', $payload),
             payload: $payload,
             criteriaResolver: function (array $row): array {
                 $identifier = $this->stringValue($row['itemid'] ?? null);
@@ -135,7 +175,7 @@ class AzureSqlService extends BaseService
         return $this->syncTable(
             table: 'custtable',
             hubspotObjectType: 'companies',
-            defaultQuery: 'SELECT * FROM [dbo].[custtable]',
+            defaultQuery: $this->buildModifiedDatetimeDefaultQuery('custtable', $payload),
             payload: $payload,
             criteriaResolver: function (array $row): array {
                 return [
@@ -152,7 +192,7 @@ class AzureSqlService extends BaseService
         return $this->syncTable(
             table: 'contactos_cl',
             hubspotObjectType: 'contacts',
-            defaultQuery: 'SELECT * FROM [dbo].[contactos_cl]',
+            defaultQuery: $this->buildModifiedDatetimeDefaultQuery('contactos_cl', $payload),
             payload: $payload,
             criteriaResolver: function (array $row): array {
                 $locator = $this->stringValue($row['locator'] ?? null);
@@ -170,10 +210,140 @@ class AzureSqlService extends BaseService
         );
     }
 
+    public function updateCustomer(array $payload): array
+    {
+        return $this->updateAzureSqlTable('custtable', $payload);
+    }
+
+    public function updateContact(array $payload): array
+    {
+        return $this->updateAzureSqlTable('contactos_cl', $payload);
+    }
+
+    private function updateAzureSqlTable(string $table, array $payload): array
+    {
+        $items = array_is_list($payload) ? $payload : [$payload];
+        $updated = 0;
+        $warnings = [];
+        $executed = [];
+
+        foreach ($items as $index => $item) {
+            if (! is_array($item)) {
+                $warnings[] = [
+                    'index' => $index,
+                    'reason' => 'invalid_payload',
+                ];
+
+                continue;
+            }
+
+            $mappedPayload = $this->buildAzureSqlWritePayload($table, $item);
+            $keyColumns = $this->resolveAzureSqlKeyColumns($table, $mappedPayload);
+            if ($keyColumns === []) {
+                $warnings[] = [
+                    'index' => $index,
+                    'reason' => 'missing_key_configuration',
+                ];
+
+                continue;
+            }
+
+            $missingKeys = array_values(array_filter(
+                $keyColumns,
+                fn (string $column): bool => ! array_key_exists($column, $mappedPayload) || $mappedPayload[$column] === null || $mappedPayload[$column] === ''
+            ));
+
+            if ($missingKeys !== []) {
+                $warnings[] = [
+                    'index' => $index,
+                    'reason' => 'missing_key_columns',
+                    'key_columns' => $keyColumns,
+                    'missing' => $missingKeys,
+                ];
+
+                continue;
+            }
+
+            $updates = $this->filterWritableUpdateColumns($table, $mappedPayload, $keyColumns);
+            if ($updates === []) {
+                $warnings[] = [
+                    'index' => $index,
+                    'reason' => 'no_writable_columns',
+                    'key_columns' => $keyColumns,
+                ];
+
+                continue;
+            }
+
+            $statement = $this->buildUpdateStatement($table, array_keys($updates), $keyColumns);
+            $bindings = array_merge(
+                array_values($updates),
+                array_map(fn (string $column): mixed => $mappedPayload[$column], $keyColumns)
+            );
+
+            try {
+                $affected = $this->makeConnection()->update($statement, $bindings);
+            } catch (\Throwable $exception) {
+                $warnings[] = [
+                    'index' => $index,
+                    'reason' => 'azure_sql_update_failed',
+                    'query' => $statement,
+                    'bindings_count' => count($bindings),
+                    'error' => [
+                        'exception' => get_class($exception),
+                        'message' => $exception->getMessage(),
+                    ],
+                ];
+
+                continue;
+            }
+
+            $updated += (int) $affected;
+            $executed[] = [
+                'index' => $index,
+                'affected_rows' => (int) $affected,
+                'updated_columns' => array_keys($updates),
+                'key_columns' => $keyColumns,
+            ];
+        }
+
+        $details = [
+            'operation' => 'azure_sql_update',
+            'table' => $table,
+            'items_received' => count($items),
+            'updated_count' => $updated,
+            'warning_count' => count($warnings),
+            'warnings' => $warnings,
+            'executed' => $executed,
+            'connection' => $this->sanitizedConnectionDetails(),
+            'output_payload' => [],
+        ];
+
+        $this->mergeRecordDetails($details);
+
+        if ($updated === 0) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => sprintf('Azure SQL update finished for %s without affected rows.', $table),
+                'data' => $details,
+            ];
+        }
+
+        return [
+            'success' => true,
+            'status' => $warnings === [] ? null : 'warning',
+            'message' => $warnings === []
+                ? sprintf('Azure SQL update finished for %s.', $table)
+                : sprintf('Azure SQL update finished for %s with warnings.', $table),
+            'data' => $details,
+        ];
+    }
+
     private function syncTable(string $table, string $hubspotObjectType, string $defaultQuery, array $payload, callable $criteriaResolver): array
     {
         if ($this->shouldPrepareBatchOutput($hubspotObjectType)) {
-            return $this->prepareBatchOutput($table, $defaultQuery, $payload);
+            return $this->prepareBatchOutput($table, $hubspotObjectType, $defaultQuery, $payload);
         }
 
         $query = trim((string) ($payload['command_sql'] ?? $this->event?->command_sql ?? $defaultQuery));
@@ -184,6 +354,8 @@ class AzureSqlService extends BaseService
         $updatedIds = [];
         $warnings = [];
         $outputPayload = [];
+        $fallbackRows = 0;
+        $nextEventConfigured = $this->event?->to_event_id !== null;
 
         try {
             $rows = $this->fetchRows($query, $table);
@@ -199,19 +371,24 @@ class AzureSqlService extends BaseService
 
         foreach ($rows as $index => $row) {
             $preparedRow = $this->buildHubspotPayload($table, $row);
-            if (! empty($preparedRow)) {
-                $outputPayload[] = $preparedRow;
-            }
 
             $match = $this->findHubspotMatch($hubspotObjectType, $criteriaResolver($row));
 
             if (! ($match['success'] ?? false)) {
+                if (($match['message'] ?? null) === 'hubspot_match_not_found' && $nextEventConfigured && ! empty($preparedRow)) {
+                    $fallbackRows++;
+                    $outputPayload[] = $preparedRow;
+
+                    continue;
+                }
+
                 $warningRows++;
                 $warnings[] = [
                     'row' => $index,
                     'reason' => $match['message'] ?? 'match_not_found',
                     'criteria' => $match['criteria_attempted'] ?? [],
                     'error' => $match['error'] ?? null,
+                    'search_failures' => $match['search_failures'] ?? [],
                 ];
                 continue;
             }
@@ -251,15 +428,18 @@ class AzureSqlService extends BaseService
             $updatedIds[] = (string) $match['hubspot_id'];
         }
 
+        $modifiedFilterColumn = $this->modifiedFilterColumn($table);
+
         $details = [
             'table' => $table,
             'query' => $query,
-            'sync_window_hours' => $table === 'inventtable' ? $this->resolveSyncWindowHours($payload) : null,
-            'modified_filter_column' => $table === 'inventtable' ? 'modifieddatetime' : null,
+            'sync_window_hours' => $modifiedFilterColumn ? $this->resolveSyncWindowHours($payload) : null,
+            'modified_filter_column' => $modifiedFilterColumn,
             'rows_read' => $rowsRead,
             'rows_matched' => $matchedRows,
             'rows_updated' => $updatedRows,
             'rows_warning' => $warningRows,
+            'rows_prepared_for_fallback' => $fallbackRows,
             'hubspot_updated_ids' => $updatedIds,
             'warnings' => $warnings,
             'connection' => $this->sanitizedConnectionDetails(),
@@ -281,6 +461,16 @@ class AzureSqlService extends BaseService
             ];
         }
 
+        if ($fallbackRows > 0) {
+            return [
+                'success' => true,
+                'message' => $warningRows > 0
+                    ? sprintf('Azure SQL sync prepared %d %s rows for HubSpot creation fallback with warnings.', $fallbackRows, $table)
+                    : sprintf('Azure SQL sync prepared %d %s rows for HubSpot creation fallback.', $fallbackRows, $table),
+                'data' => $details,
+            ];
+        }
+
         if ($updatedRows === 0) {
             return [
                 'success' => true,
@@ -297,7 +487,7 @@ class AzureSqlService extends BaseService
         ];
     }
 
-    private function prepareBatchOutput(string $table, string $defaultQuery, array $payload): array
+    private function prepareBatchOutput(string $table, string $hubspotObjectType, string $defaultQuery, array $payload): array
     {
         $query = trim((string) ($payload['command_sql'] ?? $this->event?->command_sql ?? $defaultQuery));
 
@@ -326,7 +516,7 @@ class AzureSqlService extends BaseService
                 continue;
             }
 
-            if (! $this->isValidProductOutputPayload($mappedRow)) {
+            if (! $this->isValidOutputPayload($hubspotObjectType, $mappedRow)) {
                 $warningRows[] = [
                     'row' => $index,
                     'reason' => 'invalid_output_payload',
@@ -337,11 +527,13 @@ class AzureSqlService extends BaseService
             $outputPayload[] = $mappedRow;
         }
 
+        $modifiedFilterColumn = $this->modifiedFilterColumn($table);
+
         $details = [
             'table' => $table,
             'query' => $query,
-            'sync_window_hours' => $table === 'inventtable' ? $this->resolveSyncWindowHours($payload) : null,
-            'modified_filter_column' => $table === 'inventtable' ? 'modifieddatetime' : null,
+            'sync_window_hours' => $modifiedFilterColumn ? $this->resolveSyncWindowHours($payload) : null,
+            'modified_filter_column' => $modifiedFilterColumn,
             'rows_read' => count($rows),
             'rows_prepared' => count($outputPayload),
             'rows_warning' => count($warningRows),
@@ -376,14 +568,23 @@ class AzureSqlService extends BaseService
         ];
     }
 
-    private function buildProductsDefaultQuery(array $payload): string
+    private function buildModifiedDatetimeDefaultQuery(string $table, array $payload): string
     {
         $windowHours = $this->resolveSyncWindowHours($payload);
+        $modifiedFilterColumn = $this->modifiedFilterColumn($table);
 
         return sprintf(
-            'SELECT * FROM [dbo].[inventtable] WHERE [modifieddatetime] >= DATEADD(MINUTE, -%d, GETDATE()) ORDER BY [modifieddatetime] ASC',
-            $windowHours
+            'SELECT * FROM [dbo].[%s] WHERE [%s] >= DATEADD(MINUTE, -%d, GETDATE()) ORDER BY [%s] ASC',
+            $table,
+            $modifiedFilterColumn,
+            $windowHours,
+            $modifiedFilterColumn
         );
+    }
+
+    private function modifiedFilterColumn(string $table): ?string
+    {
+        return self::MODIFIED_FILTER_COLUMNS[$table] ?? null;
     }
 
     /**
@@ -447,6 +648,8 @@ class AzureSqlService extends BaseService
     private function findHubspotMatch(string $objectType, array $criteria): array
     {
         $attempted = [];
+        $searchFailures = [];
+        $successfulSearches = 0;
 
         foreach ($criteria as $criterion) {
             $property = (string) ($criterion['property'] ?? '');
@@ -464,15 +667,17 @@ class AzureSqlService extends BaseService
             $response = $this->hubspotApi->searchObjectByProperty($objectType, $property, $value, [$property]);
 
             if (! ($response['success'] ?? false)) {
-                return [
-                    'success' => false,
-                    'message' => 'hubspot_search_failed',
-                    'criteria_attempted' => $attempted,
+                $searchFailures[] = [
+                    'property' => $property,
+                    'value' => is_scalar($value) ? (string) $value : '[non_scalar]',
                     'status_code' => $response['status_code'] ?? null,
                     'error' => $response['error'] ?? null,
                 ];
+
+                continue;
             }
 
+            $successfulSearches++;
             $results = Arr::get($response, 'data.results', []);
             if (! is_array($results) || count($results) === 0) {
                 continue;
@@ -491,6 +696,18 @@ class AzureSqlService extends BaseService
                 'hubspot_id' => (string) Arr::get($results, '0.id'),
                 'matched_by' => $property,
                 'criteria_attempted' => $attempted,
+                'search_failures' => $searchFailures,
+            ];
+        }
+
+        if ($searchFailures !== [] && $successfulSearches === 0) {
+            return [
+                'success' => false,
+                'message' => 'hubspot_search_failed',
+                'criteria_attempted' => $attempted,
+                'status_code' => $searchFailures[0]['status_code'] ?? null,
+                'error' => $searchFailures[0]['error'] ?? null,
+                'search_failures' => $searchFailures,
             ];
         }
 
@@ -498,6 +715,7 @@ class AzureSqlService extends BaseService
             'success' => false,
             'message' => 'hubspot_match_not_found',
             'criteria_attempted' => $attempted,
+            'search_failures' => $searchFailures,
         ];
     }
 
@@ -563,6 +781,123 @@ class AzureSqlService extends BaseService
         return $payload;
     }
 
+    private function buildAzureSqlWritePayload(string $table, array $payload): array
+    {
+        $allowedColumns = array_values(array_unique(array_merge(
+            self::WRITABLE_COLUMNS[$table] ?? [],
+            self::DEFAULT_KEY_COLUMNS[$table] ?? []
+        )));
+        $mappedPayload = [];
+
+        if ($this->event) {
+            $this->event->loadMissing([
+                'propertyRelationships.property:id,key,name',
+                'propertyRelationships.relatedProperty:id,key,name',
+            ]);
+        }
+
+        $relationships = $this->event?->propertyRelationships ?? collect();
+        foreach ($relationships as $relationship) {
+            if (! $relationship instanceof PropertyRelationship || ! $relationship->active) {
+                continue;
+            }
+
+            $sourceKey = $relationship->mapping_key ?: $relationship->property?->key;
+            $targetKey = $relationship->relatedProperty?->key;
+
+            if (! is_string($sourceKey) || trim($sourceKey) === '' || ! is_string($targetKey) || trim($targetKey) === '') {
+                continue;
+            }
+
+            if (! in_array($targetKey, $allowedColumns, true) || ! array_key_exists($sourceKey, $payload)) {
+                continue;
+            }
+
+            $mappedPayload[$targetKey] = $this->normalizeValue($table, $targetKey, $payload[$sourceKey]);
+        }
+
+        foreach ($payload as $key => $value) {
+            if (! is_string($key) || ! in_array($key, $allowedColumns, true) || array_key_exists($key, $mappedPayload)) {
+                continue;
+            }
+
+            $mappedPayload[$key] = $this->normalizeValue($table, $key, $value);
+        }
+
+        $fallbackMapping = is_array($this->event?->payload_mapping) ? $this->event?->payload_mapping : [];
+        foreach ($fallbackMapping as $sourceKey => $targetKey) {
+            if (! is_string($sourceKey) || ! is_string($targetKey)) {
+                continue;
+            }
+
+            if (! in_array($targetKey, $allowedColumns, true) || ! array_key_exists($sourceKey, $payload) || array_key_exists($targetKey, $mappedPayload)) {
+                continue;
+            }
+
+            $mappedPayload[$targetKey] = $this->normalizeValue($table, $targetKey, $payload[$sourceKey]);
+        }
+
+        return $mappedPayload;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveAzureSqlKeyColumns(string $table, array $payload): array
+    {
+        $meta = is_array($this->event?->meta) ? $this->event->meta : [];
+        $configured = Arr::get($meta, 'azure_sql.key_columns', Arr::get($meta, 'key_columns'));
+        $columns = array_values(array_filter(Arr::wrap($configured), 'is_string'));
+
+        if ($columns === []) {
+            $columns = self::DEFAULT_KEY_COLUMNS[$table] ?? [];
+        }
+
+        $allowedColumns = array_values(array_unique(array_merge(
+            self::WRITABLE_COLUMNS[$table] ?? [],
+            self::DEFAULT_KEY_COLUMNS[$table] ?? []
+        )));
+
+        return array_values(array_filter(
+            $columns,
+            fn (string $column): bool => in_array($column, $allowedColumns, true)
+        ));
+    }
+
+    private function filterWritableUpdateColumns(string $table, array $payload, array $keyColumns): array
+    {
+        $updates = [];
+
+        foreach (self::WRITABLE_COLUMNS[$table] ?? [] as $column) {
+            if (in_array($column, $keyColumns, true) || ! array_key_exists($column, $payload)) {
+                continue;
+            }
+
+            $updates[$column] = $payload[$column];
+        }
+
+        return $updates;
+    }
+
+    private function buildUpdateStatement(string $table, array $updateColumns, array $keyColumns): string
+    {
+        $setClause = implode(', ', array_map(
+            fn (string $column): string => sprintf('[%s] = ?', str_replace(']', ']]', $column)),
+            $updateColumns
+        ));
+        $whereClause = implode(' AND ', array_map(
+            fn (string $column): string => sprintf('[%s] = ?', str_replace(']', ']]', $column)),
+            $keyColumns
+        ));
+
+        return sprintf(
+            'UPDATE [dbo].[%s] SET %s WHERE %s',
+            str_replace(']', ']]', $table),
+            $setClause,
+            $whereClause
+        );
+    }
+
     private function normalizeValue(string $table, string $column, mixed $value): mixed
     {
         if ($value === null) {
@@ -608,6 +943,15 @@ class AzureSqlService extends BaseService
         }
 
         return $default;
+    }
+
+    private function isValidOutputPayload(string $hubspotObjectType, array $payload): bool
+    {
+        if ($hubspotObjectType !== 'products') {
+            return $payload !== [];
+        }
+
+        return $this->isValidProductOutputPayload($payload);
     }
 
     private function isValidProductOutputPayload(array $payload): bool
@@ -682,7 +1026,12 @@ class AzureSqlService extends BaseService
             return false;
         }
 
-        return $hubspotObjectType === 'products' && $nextEvent->event_type_id === 'product.updated';
+        return match ($hubspotObjectType) {
+            'products' => $nextEvent->event_type_id === 'product.updated',
+            'companies' => $nextEvent->event_type_id === 'company.updated',
+            'contacts' => $nextEvent->event_type_id === 'contact.updated',
+            default => false,
+        };
     }
 
     private function applyHubspotRuntimeConfig(): void

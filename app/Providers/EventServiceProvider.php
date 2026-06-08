@@ -4,6 +4,8 @@ namespace App\Providers;
 
 use App\Events\Company\CreateCompanyEvent;
 use App\Events\Company\UpdateCompanyEvent;
+use App\Events\Contact\CreateContactEvent;
+use App\Events\Contact\UpdateContactEvent;
 use App\Events\Generic\ExternalCallEvent;
 use App\Events\Invoice\CreateInvoiceEvent;
 use App\Events\Invoice\CreateRecurringInvoiceEvent;
@@ -18,6 +20,8 @@ use App\Events\Response\SendResponseEvent;
 use App\Events\SaleOrder\CreateSaleOrderEvent;
 use App\Listeners\Company\CreateCompanyListener;
 use App\Listeners\Company\UpdateCompanyListener;
+use App\Listeners\Contact\CreateContactListener;
+use App\Listeners\Contact\UpdateContactListener;
 use App\Listeners\Generic\ExternalCallListener;
 use App\Listeners\Invoice\CreateInvoiceListener;
 use App\Listeners\Invoice\CreateRecurringInvoiceListener;
@@ -40,6 +44,12 @@ class EventServiceProvider extends ServiceProvider
         ],
         UpdateCompanyEvent::class => [
             UpdateCompanyListener::class,
+        ],
+        CreateContactEvent::class => [
+            CreateContactListener::class,
+        ],
+        UpdateContactEvent::class => [
+            UpdateContactListener::class,
         ],
         CreateProductEvent::class => [
             CreateProductListener::class,

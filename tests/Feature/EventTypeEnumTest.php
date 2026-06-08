@@ -17,7 +17,7 @@ class EventTypeEnumTest extends TestCase
         $groups = EventType::groupedOptions();
 
         $this->assertNotEmpty($groups);
-        $this->assertSame('Core Events', $groups[0]['label']);
+        $this->assertSame('Eventos principales', $groups[0]['label']);
         $this->assertTrue(collect($groups)->contains(
             fn (array $group): bool => collect($group['options'])->contains(
                 fn (array $option): bool => $option['value'] === EventType::GENERIC_EXTERNAL_CALL->value
@@ -31,6 +31,8 @@ class EventTypeEnumTest extends TestCase
         $options = collect($groups)->flatMap(fn (array $group) => $group['options']);
 
         $this->assertTrue($options->contains(fn (array $option): bool => $option['value'] === EventType::GENERIC_EXTERNAL_CALL->value));
+        $this->assertTrue($options->contains(fn (array $option): bool => $option['value'] === EventType::AZURE_SQL_CUSTOMER_UPDATE->value));
+        $this->assertTrue($options->contains(fn (array $option): bool => $option['value'] === EventType::AZURE_SQL_CONTACT_UPDATE->value));
         $this->assertFalse($options->contains(fn (array $option): bool => $option['value'] === EventType::ODOO_GET_LIST_PRICES->value));
     }
 
@@ -63,7 +65,7 @@ class EventTypeEnumTest extends TestCase
             'active' => true,
         ]);
 
-        $this->assertSame('Generic External Call', $event->getEventTypeLabel());
+        $this->assertSame('Llamada HTTP genérica', $event->getEventTypeLabel());
         $this->assertSame(\App\Events\Generic\ExternalCallEvent::class, $event->getEventClass());
     }
 
@@ -87,6 +89,41 @@ class EventTypeEnumTest extends TestCase
         ]);
 
         $this->assertSame('contactPropertyChange', $event->getMethodName());
+    }
+
+    public function test_event_model_resolves_azure_sql_update_methods_from_event_type(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'Azure SQL',
+            'slug' => 'azure-sql-main',
+            'type' => 'generic',
+            'settings' => [
+                'service_driver' => 'azure_sql',
+            ],
+            'active' => true,
+        ]);
+
+        $customerEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Azure SQL Customer Update',
+            'event_type_id' => EventType::AZURE_SQL_CUSTOMER_UPDATE->value,
+            'type' => 'webhook',
+            'method_name' => null,
+            'active' => true,
+        ]);
+        $contactEvent = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Azure SQL Contact Update',
+            'event_type_id' => EventType::AZURE_SQL_CONTACT_UPDATE->value,
+            'type' => 'webhook',
+            'method_name' => null,
+            'active' => true,
+        ]);
+
+        $this->assertSame('updateCustomer', $customerEvent->getMethodName());
+        $this->assertSame('updateContact', $contactEvent->getMethodName());
+        $this->assertSame(\App\Events\Object\UpdateObjectEvent::class, $customerEvent->getEventClass());
+        $this->assertSame(\App\Events\Object\UpdateObjectEvent::class, $contactEvent->getEventClass());
     }
 
     public function test_event_model_resolves_hubspot_method_name_from_event_type_when_subscription_is_missing(): void
