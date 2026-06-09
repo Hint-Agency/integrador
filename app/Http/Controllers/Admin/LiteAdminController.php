@@ -176,7 +176,9 @@ class LiteAdminController extends Controller
             ->orderByDesc('priority')
             ->orderBy('name')
             ->get()
-            ->map(static function (MessageRule $rule): array {
+            ->map(function (MessageRule $rule): array {
+                $conditionBuilder = $this->buildConditionBuilder($rule->conditions ?? []);
+
                 return [
                     'id' => $rule->id,
                     'name' => $rule->name,
@@ -184,11 +186,9 @@ class LiteAdminController extends Controller
                     'trigger_property' => $rule->trigger_property,
                     'trigger_value' => $rule->trigger_value,
                     'conditions' => $rule->conditions ?? [],
-                    'conditions_list' => collect($rule->conditions ?? [])
-                        ->map(fn (mixed $value, string|int $property) => [
-                            'property' => (string) $property,
-                            'value' => is_scalar($value) ? (string) $value : '',
-                        ])->values()->all(),
+                    'condition_builder' => $conditionBuilder,
+                    'group_count' => count($conditionBuilder['groups']),
+                    'rule_count' => collect($conditionBuilder['groups'])->sum(fn (array $group): int => count($group['rules'] ?? [])),
                     'active' => (bool) $rule->active,
                     'treble_template_id' => $rule->treble_template_id,
                     'treble_template' => $rule->trebleTemplate ? [
@@ -230,11 +230,7 @@ class LiteAdminController extends Controller
                 'trigger_property' => $rule->trigger_property,
                 'trigger_value' => $rule->trigger_value,
                 'conditions' => $rule->conditions ?? [],
-                'conditions_list' => collect($rule->conditions ?? [])
-                    ->map(fn (mixed $value, string|int $property) => [
-                        'property' => (string) $property,
-                        'value' => is_scalar($value) ? (string) $value : '',
-                    ])->values()->all(),
+                'condition_builder' => $this->buildConditionBuilder($rule->conditions ?? []),
                 'active' => (bool) $rule->active,
                 'treble_template_id' => $rule->treble_template_id,
             ],
@@ -362,5 +358,126 @@ class LiteAdminController extends Controller
         return inertia('Admin/Records', [
             'records' => $records,
         ]);
+    }
+
+    private function buildConditionBuilder(mixed $conditions): array
+    {
+        if (! is_array($conditions)) {
+            return [
+                'match' => 'all',
+                'groups' => [[
+                    'match' => 'all',
+                    'rules' => [[
+                        'property' => '',
+                        'operator' => 'equals',
+                        'value' => '',
+                    ]],
+                ]],
+            ];
+        }
+
+        if (isset($conditions['groups']) && is_array($conditions['groups'])) {
+            $groups = collect($conditions['groups'])
+                ->map(function (mixed $group): ?array {
+                    if (! is_array($group)) {
+                        return null;
+                    }
+
+                    $rules = collect($group['rules'] ?? [])
+                        ->map(function (mixed $rule): ?array {
+                            if (! is_array($rule)) {
+                                return null;
+                            }
+
+                            return [
+                                'property' => (string) ($rule['property'] ?? ''),
+                                'operator' => (string) ($rule['operator'] ?? 'equals'),
+                                'value' => is_scalar($rule['value'] ?? null) || ($rule['value'] ?? null) === null
+                                    ? (string) ($rule['value'] ?? '')
+                                    : '',
+                            ];
+                        })
+                        ->filter()
+                        ->values()
+                        ->all();
+
+                    return [
+                        'match' => ($group['match'] ?? 'all') === 'any' ? 'any' : 'all',
+                        'rules' => $rules === [] ? [[
+                            'property' => '',
+                            'operator' => 'equals',
+                            'value' => '',
+                        ]] : $rules,
+                    ];
+                })
+                ->filter()
+                ->values()
+                ->all();
+
+            return [
+                'match' => ($conditions['match'] ?? 'all') === 'any' ? 'any' : 'all',
+                'groups' => $groups === [] ? [[
+                    'match' => 'all',
+                    'rules' => [[
+                        'property' => '',
+                        'operator' => 'equals',
+                        'value' => '',
+                    ]],
+                ]] : $groups,
+            ];
+        }
+
+        if (array_is_list($conditions)) {
+            $rules = collect($conditions)
+                ->map(function (mixed $rule): ?array {
+                    if (! is_array($rule)) {
+                        return null;
+                    }
+
+                    return [
+                        'property' => (string) ($rule['property'] ?? ''),
+                        'operator' => (string) ($rule['operator'] ?? 'equals'),
+                        'value' => is_scalar($rule['value'] ?? null) || ($rule['value'] ?? null) === null
+                            ? (string) ($rule['value'] ?? '')
+                            : '',
+                    ];
+                })
+                ->filter()
+                ->values()
+                ->all();
+
+            return [
+                'match' => 'all',
+                'groups' => [[
+                    'match' => 'all',
+                    'rules' => $rules === [] ? [[
+                        'property' => '',
+                        'operator' => 'equals',
+                        'value' => '',
+                    ]] : $rules,
+                ]],
+            ];
+        }
+
+        $rules = collect($conditions)
+            ->map(fn (mixed $value, string|int $property): array => [
+                'property' => (string) $property,
+                'operator' => 'equals',
+                'value' => is_scalar($value) ? (string) $value : '',
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'match' => 'all',
+            'groups' => [[
+                'match' => 'all',
+                'rules' => $rules === [] ? [[
+                    'property' => '',
+                    'operator' => 'equals',
+                    'value' => '',
+                ]] : $rules,
+            ]],
+        ];
     }
 }

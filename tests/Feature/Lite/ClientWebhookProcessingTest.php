@@ -168,6 +168,117 @@ class ClientWebhookProcessingTest extends TestCase
         $this->assertSame('High', $resolved->name);
     }
 
+    public function test_rule_can_match_nested_groups_with_any_logic(): void
+    {
+        $client = Client::query()->create([
+            'name' => 'Grouped Client',
+            'slug' => 'grouped-client',
+            'active' => true,
+        ]);
+
+        $template = TrebleTemplate::query()->create([
+            'client_id' => $client->id,
+            'name' => 'Grouped Template',
+            'external_template_id' => 'tpl-grouped',
+            'request_template' => ['template_id' => '{{template.external_template_id}}'],
+            'active' => true,
+        ]);
+
+        MessageRule::query()->create([
+            'client_id' => $client->id,
+            'treble_template_id' => $template->id,
+            'name' => 'Grouped Rule',
+            'priority' => 100,
+            'trigger_property' => 'plantilla_de_whatsapp',
+            'trigger_value' => 'Bienvenida',
+            'conditions' => [
+                'match' => 'all',
+                'groups' => [
+                    [
+                        'match' => 'any',
+                        'rules' => [
+                            ['property' => 'campus_de_interes', 'operator' => 'equals', 'value' => 'Cancun'],
+                            ['property' => 'campus_de_interes', 'operator' => 'equals', 'value' => 'La Paz'],
+                        ],
+                    ],
+                    [
+                        'match' => 'all',
+                        'rules' => [
+                            ['property' => 'nivel_escolar_de_interes', 'operator' => 'in', 'value' => 'Primaria, Secundaria'],
+                            ['property' => 'firstname', 'operator' => 'contains', 'value' => 'Car'],
+                        ],
+                    ],
+                ],
+            ],
+            'active' => true,
+        ]);
+
+        $resolver = app(\App\Services\Lite\MessageRuleResolver::class);
+        $resolved = $resolver->resolve($client->id, [
+            'plantilla_de_whatsapp' => 'Bienvenida',
+            'campus_de_interes' => 'La Paz',
+            'nivel_escolar_de_interes' => 'Primaria',
+            'firstname' => 'Carlos',
+        ], 'plantilla_de_whatsapp', 'Bienvenida');
+
+        $this->assertNotNull($resolved);
+        $this->assertSame('Grouped Rule', $resolved->name);
+    }
+
+    public function test_rule_does_not_match_when_grouped_conditions_fail(): void
+    {
+        $client = Client::query()->create([
+            'name' => 'Grouped Client 2',
+            'slug' => 'grouped-client-2',
+            'active' => true,
+        ]);
+
+        $template = TrebleTemplate::query()->create([
+            'client_id' => $client->id,
+            'name' => 'Grouped Template 2',
+            'external_template_id' => 'tpl-grouped-2',
+            'request_template' => ['template_id' => '{{template.external_template_id}}'],
+            'active' => true,
+        ]);
+
+        MessageRule::query()->create([
+            'client_id' => $client->id,
+            'treble_template_id' => $template->id,
+            'name' => 'Strict Grouped Rule',
+            'priority' => 100,
+            'trigger_property' => 'plantilla_de_whatsapp',
+            'trigger_value' => 'Bienvenida',
+            'conditions' => [
+                'match' => 'all',
+                'groups' => [
+                    [
+                        'match' => 'any',
+                        'rules' => [
+                            ['property' => 'campus_de_interes', 'operator' => 'equals', 'value' => 'Cancun'],
+                            ['property' => 'campus_de_interes', 'operator' => 'equals', 'value' => 'La Paz'],
+                        ],
+                    ],
+                    [
+                        'match' => 'all',
+                        'rules' => [
+                            ['property' => 'nivel_escolar_de_interes', 'operator' => 'not_equals', 'value' => 'Primaria'],
+                        ],
+                    ],
+                ],
+            ],
+            'active' => true,
+        ]);
+
+        $resolver = app(\App\Services\Lite\MessageRuleResolver::class);
+        $resolved = $resolver->resolve($client->id, [
+            'plantilla_de_whatsapp' => 'Bienvenida',
+            'campus_de_interes' => 'La Paz',
+            'nivel_escolar_de_interes' => 'Primaria',
+        ], 'plantilla_de_whatsapp', 'Bienvenida');
+
+        $this->assertNull($resolved);
+    }
+
     public function test_treble_error_creates_hubspot_note_result_in_record_details(): void
     {
         [$client] = $this->seedClientConnections();

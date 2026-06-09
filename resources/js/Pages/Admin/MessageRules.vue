@@ -29,7 +29,8 @@ const destroyRule = (rule) => {
                     <p>{{ rule.trigger_property }} = {{ rule.trigger_value || '(vacío)' }}</p>
                     <small>
                         Prioridad {{ rule.priority }} · {{ rule.treble_template?.name || 'Sin plantilla' }}
-                        · {{ Array.isArray(rule.conditions_list) ? rule.conditions_list.length : Object.keys(rule.conditions || {}).length }} condición(es)
+                        · {{ rule.group_count || 0 }} grupo(s)
+                        · {{ rule.rule_count || 0 }} condición(es)
                     </small>
                 </div>
                 <div class="actions">
