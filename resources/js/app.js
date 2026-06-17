@@ -14,3 +14,18 @@ createInertiaApp({
             .mount(el);
     },
 });
+
+// Fix for Inertia Laravel 3.x rendering data-page in script tag instead of div
+document.addEventListener('DOMContentLoaded', function() {
+    const appDiv = document.getElementById('app');
+    if (appDiv && !appDiv.dataset.page) {
+        const scriptTag = document.querySelector('script[data-page]');
+        if (scriptTag && scriptTag.textContent) {
+            try {
+                appDiv.dataset.page = scriptTag.textContent;
+            } catch (e) {
+                console.error('Failed to move data-page from script to div', e);
+            }
+        }
+    }
+});
