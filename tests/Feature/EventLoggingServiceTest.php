@@ -109,7 +109,7 @@ class EventLoggingServiceTest extends TestCase
         $record->refresh();
 
         $this->assertSame('warning', $record->status);
-        $this->assertSame('Event method not available for execution.', $record->message);
+        $this->assertSame('El método del evento no está disponible para ejecución.', $record->message);
         $this->assertSame('method_not_available', $record->details['reason'] ?? null);
     }
 }

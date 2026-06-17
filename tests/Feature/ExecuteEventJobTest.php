@@ -46,7 +46,7 @@ class ExecuteEventJobTest extends TestCase
 
         $this->assertNotNull($record);
         $this->assertSame('error', $record->status);
-        $this->assertSame('Invalid method name for scheduled event.', $record->message);
+        $this->assertSame('Nombre de método inválido para el evento programado.', $record->message);
         $this->assertSame('missing_method_name', data_get($record->details, 'reason'));
         $this->assertSame('azure_sql.products.sync', data_get($record->details, 'event_type_id'));
         $this->assertSame('events', data_get($record->details, 'queue'));

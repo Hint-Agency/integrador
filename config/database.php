@@ -4,7 +4,7 @@ use Illuminate\Support\Str;
 
 $mysqlSslCaAttribute = defined('Pdo\\Mysql::ATTR_SSL_CA')
     ? Pdo\Mysql::ATTR_SSL_CA
-    : PDO::MYSQL_ATTR_SSL_CA;
+    : constant('PDO::MYSQL_ATTR_SSL_CA');
 
 return [
 
