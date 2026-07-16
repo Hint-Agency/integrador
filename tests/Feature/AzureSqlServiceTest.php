@@ -26,7 +26,7 @@ class AzureSqlServiceTest extends TestCase
     private const PRODUCTS_DEFAULT_QUERY = 'SELECT * FROM [dbo].[inventtable] WHERE [modifieddatetime] >= DATEADD(MINUTE, -24, GETDATE()) ORDER BY [modifieddatetime] ASC';
     private const PRODUCTS_48_HOURS_QUERY = 'SELECT * FROM [dbo].[inventtable] WHERE [modifieddatetime] >= DATEADD(MINUTE, -48, GETDATE()) ORDER BY [modifieddatetime] ASC';
     private const ACCOUNTS_DEFAULT_QUERY = 'SELECT * FROM [dbo].[custtable] WHERE [modifieddatetime] >= DATEADD(MINUTE, -24, GETDATE()) ORDER BY [modifieddatetime] ASC';
-    private const CONTACTS_DEFAULT_QUERY = 'SELECT * FROM [dbo].[contactos_cl] WHERE [modifieddatetime] >= DATEADD(MINUTE, -24, GETDATE()) ORDER BY [modifieddatetime] ASC';
+    private const CONTACTS_DEFAULT_QUERY = 'SELECT * FROM [dbo].[contactos_cl] WHERE [modifiedon] >= DATEADD(MINUTE, -24, GETDATE()) ORDER BY [modifiedon] ASC';
     private const CUSTOMER_UPDATE_QUERY = 'UPDATE [dbo].[custtable] SET [custname] = ? WHERE [accountnum] = ?';
     private const CUSTOMER_CHAIN_UPDATE_QUERY = 'UPDATE [dbo].[custtable] SET [Cadenas_Empresas] = ? WHERE [accountnum] = ?';
     private const CONTACT_UPDATE_QUERY = 'UPDATE [dbo].[contactos_cl] SET [locator] = ? WHERE [accountnum] = ? AND [Tipo] = ?';
@@ -122,7 +122,7 @@ class AzureSqlServiceTest extends TestCase
             ->with('products', '2001', ['name' => 'Teclado mecanico'])
             ->andReturn(['success' => true, 'data' => ['id' => '2001']]);
 
-        $service = new AzureSqlService($platform, $event, $record, $hubspotApi);
+        $service = new AzureSqlService($platform, $event->fresh(), $record, $hubspotApi);
         $result = $service->syncProducts();
 
         $this->assertTrue($result['success']);
@@ -160,7 +160,7 @@ class AzureSqlServiceTest extends TestCase
 
         $this->attachRelationship($event, $platform, 'itemid', 'identificador_db');
         $this->attachRelationship($event, $platform, 'ProductName', 'name');
-        $this->attachRelationship($event, $platform, 'modifieddatetime', 'date_modificacion_db');
+        $this->attachRelationship($event, $platform, 'modifiedon', 'date_modificacion_db');
 
         $connection = Mockery::mock(ConnectionInterface::class);
         $connection->shouldReceive('select')
@@ -181,7 +181,7 @@ class AzureSqlServiceTest extends TestCase
         $hubspotApi->shouldNotReceive('searchObjectByProperty');
         $hubspotApi->shouldNotReceive('updateObject');
 
-        $service = new AzureSqlService($platform, $event->fresh('to_event.platform'), $record, $hubspotApi);
+        $service = new AzureSqlService($platform, $event->fresh(['to_event.platform']), $record, $hubspotApi);
         $result = $service->syncProducts();
 
         $this->assertTrue($result['success']);
@@ -409,7 +409,7 @@ class AzureSqlServiceTest extends TestCase
         [$platform, $event] = $this->makeAzureSqlEvent('syncContacts', 'azure_sql.contacts.sync');
         $record = $this->makeRecord($event);
 
-        $this->attachRelationship($event, $platform, 'accountnum', 'identificador_db');
+        $this->attachRelationship($event, $platform, 'recid', 'identificador_db');
         $this->attachRelationship($event, $platform, 'locator', 'phone');
         $this->attachRelationship($event, $platform, 'Tipo', 'tipo_locator');
         $this->attachRelationship($event, $platform, 'modifieddatetime', 'date_modificacion_db');
@@ -420,10 +420,11 @@ class AzureSqlServiceTest extends TestCase
             ->with(self::CONTACTS_DEFAULT_QUERY)
             ->andReturn([
                 (object) [
+                    'recid' => 77001,
                     'accountnum' => 'CT-77',
                     'locator' => 'persona@example.com',
                     'Tipo' => 'correo',
-                    'modifieddatetime' => '2026-05-13 12:15:00',
+                    'modifiedon' => '2026-05-13 12:15:00',
                 ],
             ]);
 
@@ -433,14 +434,16 @@ class AzureSqlServiceTest extends TestCase
         $hubspotApi = Mockery::mock(HubspotApiServiceRefactored::class);
         $hubspotApi->shouldReceive('searchObjectByProperty')
             ->once()
-            ->with('contacts', 'identificador_db', 'CT-77', ['identificador_db'])
+            ->with('contacts', 'identificador_db', '77001', ['identificador_db'])
             ->andReturn(['success' => true, 'data' => ['results' => [['id' => 'ct-77']]]]);
         $hubspotApi->shouldReceive('updateObject')
             ->once()
-            ->with('contacts', 'ct-77', [
-                'identificador_db' => 'CT-77',
-                'date_modificacion_db' => '2026-05-13 12:15:00',
-            ])
+            ->withArgs(function (string $objectType, string $objectId, array $payload): bool {
+                return $objectType === 'contacts'
+                    && $objectId === 'ct-77'
+                    && ($payload['identificador_db'] ?? null) === 77001
+                    && ($payload['date_modificacion_db'] ?? null) === '2026-05-13 12:15:00';
+            })
             ->andReturn(['success' => true, 'data' => ['id' => 'ct-77']]);
 
         $service = new AzureSqlService($platform, $event, $record, $hubspotApi);
@@ -449,7 +452,7 @@ class AzureSqlServiceTest extends TestCase
         $this->assertTrue($result['success']);
         $this->assertSame(1, data_get($result, 'data.rows_updated'));
         $this->assertSame(24, data_get($result, 'data.sync_window_hours'));
-        $this->assertSame('modifieddatetime', data_get($result, 'data.modified_filter_column'));
+        $this->assertSame('modifiedon', data_get($result, 'data.modified_filter_column'));
     }
 
     public function test_sync_contacts_prepares_batch_output_when_next_event_is_hubspot_contact_update(): void
@@ -480,8 +483,8 @@ class AzureSqlServiceTest extends TestCase
 
         $record = $this->makeRecord($event);
 
-        $this->attachRelationship($event, $platform, 'accountnum', 'identificador_db');
-        $this->attachRelationship($event, $platform, 'modifieddatetime', 'date_modificacion_db');
+        $this->attachRelationship($event, $platform, 'recid', 'identificador_db');
+        $this->attachRelationship($event, $platform, 'modifiedon', 'date_modificacion_db');
 
         $connection = Mockery::mock(ConnectionInterface::class);
         $connection->shouldReceive('select')
@@ -489,10 +492,11 @@ class AzureSqlServiceTest extends TestCase
             ->with(self::CONTACTS_DEFAULT_QUERY)
             ->andReturn([
                 (object) [
+                    'recid' => 77001,
                     'accountnum' => 'CT-77',
                     'locator' => 'persona@example.com',
                     'Tipo' => 'correo',
-                    'modifieddatetime' => '2026-05-13 12:15:00',
+                    'modifiedon' => '2026-05-13 12:15:00',
                 ],
             ]);
 
@@ -509,7 +513,7 @@ class AzureSqlServiceTest extends TestCase
         $this->assertTrue($result['success']);
         $this->assertSame('next_event', data_get($result, 'data.dispatch_mode'));
         $this->assertSame(1, data_get($result, 'data.output_payload_count'));
-        $this->assertSame('CT-77', data_get($result, 'data.output_payload.0.identificador_db'));
+        $this->assertSame(77001, data_get($result, 'data.output_payload.0.identificador_db'));
         $this->assertSame('2026-05-13 12:15:00', data_get($result, 'data.output_payload.0.date_modificacion_db'));
     }
 

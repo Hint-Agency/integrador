@@ -51,8 +51,9 @@ class AzureSqlService extends BaseService
             'modifieddatetime',
         ],
         'contactos_cl' => [
+            'recid',
             'accountnum',
-            'modifieddatetime',
+            'modifiedon',
         ],
     ];
 
@@ -62,7 +63,7 @@ class AzureSqlService extends BaseService
     private const MODIFIED_FILTER_COLUMNS = [
         'inventtable' => 'modifieddatetime',
         'custtable' => 'modifieddatetime',
-        'contactos_cl' => 'modifieddatetime',
+        'contactos_cl' => 'modifiedon',
     ];
 
     /**
@@ -197,12 +198,13 @@ class AzureSqlService extends BaseService
             criteriaResolver: function (array $row): array {
                 $locator = $this->stringValue($row['locator'] ?? null);
                 $type = Str::lower($this->stringValue($row['Tipo'] ?? null) ?? '');
+                $recid = $this->stringValue($row['recid'] ?? null);
 
                 $email = in_array($type, ['correo', 'email', 'mail'], true) ? $locator : null;
                 $phone = in_array($type, ['telefono', 'teléfono', 'phone', 'celular'], true) ? $locator : null;
 
                 return [
-                    ['property' => 'identificador_db', 'value' => $this->stringValue($row['accountnum'] ?? null)],
+                    ['property' => 'identificador_db', 'value' => $recid],
                     ['property' => 'email', 'value' => $email],
                     ['property' => 'phone', 'value' => $phone],
                 ];
@@ -756,6 +758,8 @@ class AzureSqlService extends BaseService
             $payload[$targetKey] = $value;
         }
 
+        $this->appendModifiedDatePayload($payload, $row, $relationships, $table);
+
         if (! empty($payload)) {
             return $payload;
         }
@@ -779,6 +783,38 @@ class AzureSqlService extends BaseService
         }
 
         return $payload;
+    }
+
+    /**
+     * @param  iterable<PropertyRelationship>  $relationships
+     */
+    private function appendModifiedDatePayload(array &$payload, array $row, iterable $relationships, string $table): void
+    {
+        if (array_key_exists('date_modificacion_db', $payload)) {
+            return;
+        }
+
+        $modifiedSourceKey = $this->modifiedFilterColumn($table);
+        if (! is_string($modifiedSourceKey) || $modifiedSourceKey === '') {
+            return;
+        }
+
+        $modifiedValue = $row[$modifiedSourceKey] ?? null;
+        if ($modifiedValue === null) {
+            return;
+        }
+
+        foreach ($relationships as $relationship) {
+            if (! $relationship instanceof PropertyRelationship || ! $relationship->active) {
+                continue;
+            }
+
+            $targetKey = $relationship->relatedProperty?->key;
+            if ($targetKey === 'date_modificacion_db') {
+                $payload['date_modificacion_db'] = $modifiedValue;
+                return;
+            }
+        }
     }
 
     private function buildAzureSqlWritePayload(string $table, array $payload): array
