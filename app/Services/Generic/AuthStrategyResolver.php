@@ -32,8 +32,17 @@ class AuthStrategyResolver
             throw new \RuntimeException('Missing bearer API key for platform auth.');
         }
 
+        $headerName = $authConfig['header_name'] ?? 'Authorization';
+        if (! is_string($headerName) || trim($headerName) === '') {
+            $headerName = 'Authorization';
+        }
+
+        $prefix = array_key_exists('header_prefix', $authConfig)
+            ? (string) $authConfig['header_prefix']
+            : 'Bearer ';
+
         return [
-            'Authorization' => 'Bearer ' . $apiKey,
+            trim($headerName) => $prefix . $apiKey,
         ];
     }
 

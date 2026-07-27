@@ -115,6 +115,7 @@ class Event extends Model
                 'contact.propertychange' => 'contactPropertyChange',
                 'company.propertychange' => 'companyPropertyChange',
                 'deal.propertychange' => 'dealPropertyChange',
+                'line_item.propertychange' => 'lineItemPropertyChange',
                 'object.propertychange' => 'objectPropertyChange',
                 'invoice.propertychange' => 'invoicePropertyChange',
                 'hubspot.property.changed' => 'objectPropertyChange',

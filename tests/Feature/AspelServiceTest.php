@@ -806,4 +806,121 @@ class AspelServiceTest extends TestCase
         $this->assertTrue($response['success']);
         $this->assertSame('GET', $response['method']);
     }
+
+    public function test_it_syncs_line_item_inventory_using_selected_warehouses(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => [
+                'api_key' => 'token_123',
+            ],
+            'settings' => [
+                'service_driver' => 'aspel',
+            ],
+            'active' => true,
+        ]);
+
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Sync Line Item Warehouse Inventory',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'syncLineItemWarehouseInventory',
+            'type' => 'webhook',
+            'meta' => [
+                'article_property' => 'clave',
+                'warehouse_property' => 'almacen_id',
+            ],
+            'active' => true,
+        ]);
+
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'GET',
+            'base_url' => 'https://api.example.com',
+            'path' => '/api/almacenes/{cveArticulo}',
+            'auth_mode' => 'bearer_api_key',
+            'auth_config_json' => [
+                'header_name' => 'x-api-key',
+                'header_prefix' => '',
+            ],
+            'active' => true,
+        ]);
+
+        $service = new AspelService(
+            $platform,
+            app(AuthStrategyResolver::class),
+            $event,
+            null,
+        );
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/api/almacenes/ABC123'
+                && $method === 'GET'
+                && ($headers['x-api-key'] ?? null) === 'token_123'
+                && $query === []
+                && $body === [];
+        })->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_warehouse_1',
+            'external_id' => null,
+            'latency_ms' => 10,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/almacenes/ABC123',
+            'method' => 'GET',
+            'data' => [
+                [
+                    'cveArt' => 'ABC123',
+                    'cveAlm' => '001',
+                    'exist' => 12.5,
+                    'stockMax' => 100,
+                    'stockMin' => 10,
+                ],
+                [
+                    'cveArt' => 'ABC123',
+                    'cveAlm' => '002',
+                    'exist' => 5.0,
+                    'stockMax' => 50,
+                    'stockMin' => 5,
+                ],
+                [
+                    'cveArt' => 'ABC123',
+                    'cveAlm' => '003',
+                    'exist' => 99.0,
+                    'stockMax' => 999,
+                    'stockMin' => 1,
+                ],
+            ],
+            'error' => [
+                'code' => null,
+                'message' => null,
+                'details' => null,
+            ],
+        ]);
+
+        $response = $service->syncLineItemWarehouseInventory([
+            'hubspot_object_id' => 'line_1',
+            'clave' => 'ABC123',
+            'almacen_id' => '001,002',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame(17.5, $response['data']['existencias']);
+        $this->assertSame(150.0, $response['data']['stock_maximo']);
+        $this->assertSame(15.0, $response['data']['stock_minimo']);
+        $this->assertSame(['001', '002'], $response['data']['selected_warehouses']);
+        $this->assertSame(['001', '002'], $response['data']['matched_warehouses']);
+    }
 }

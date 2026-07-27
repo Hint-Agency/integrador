@@ -129,6 +129,93 @@ class AspelService extends GenericPlatformService
         );
     }
 
+    public function syncLineItemWarehouseInventory(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $articleProperty = $this->resolveArticlePropertyKey();
+        $warehouseProperty = $this->resolveWarehousePropertyKey();
+        $articleKey = $this->resolveLineItemArticleKey($payload, $articleProperty);
+
+        if ($articleKey === null) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'Line item does not include the ASPEL article key required to query warehouses.',
+                'data' => [
+                    'warning_reason' => 'missing_article_key',
+                    'article_property' => $articleProperty,
+                    'warehouse_property' => $warehouseProperty,
+                    'output_payload' => [],
+                ],
+            ];
+        }
+
+        $selectedWarehouses = $this->parseWarehouseIds(Arr::get($payload, $warehouseProperty));
+        if ($selectedWarehouses === []) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'Line item does not include any selected warehouse ids.',
+                'data' => [
+                    'warning_reason' => 'missing_selected_warehouses',
+                    'article_property' => $articleProperty,
+                    'warehouse_property' => $warehouseProperty,
+                    'cveArticulo' => $articleKey,
+                    'output_payload' => [],
+                ],
+            ];
+        }
+
+        $response = $this->sendRequest(
+            $this->resolveWarehouseInventoryEndpoint($articleKey),
+            'GET',
+            [],
+            $httpAdapter
+        );
+
+        if (! ($response['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => 'Failed to fetch ASPEL warehouse inventory for line item.',
+                'data' => [
+                    'article_property' => $articleProperty,
+                    'warehouse_property' => $warehouseProperty,
+                    'cveArticulo' => $articleKey,
+                    'selected_warehouses' => $selectedWarehouses,
+                    'warehouse_response' => $response,
+                ],
+            ];
+        }
+
+        $records = Arr::get($response, 'data', []);
+        if (! is_array($records)) {
+            $records = [];
+        }
+
+        $filteredRecords = array_values(array_filter(
+            array_filter($records, 'is_array'),
+            fn (array $record): bool => in_array(trim((string) ($record['cveAlm'] ?? '')), $selectedWarehouses, true)
+        ));
+
+        $aggregated = $this->aggregateWarehouseInventory($filteredRecords);
+
+        return [
+            'success' => true,
+            'message' => 'ASPEL warehouse inventory synchronized for line item.',
+            'data' => [
+                'cveArticulo' => $articleKey,
+                'selected_warehouses' => $selectedWarehouses,
+                'matched_warehouses' => array_values(array_filter(array_map(
+                    static fn (array $record): string => trim((string) ($record['cveAlm'] ?? '')),
+                    $filteredRecords
+                ))),
+                'warehouse_records' => $filteredRecords,
+                'existencias' => $aggregated['existencias'],
+                'stock_maximo' => $aggregated['stock_maximo'],
+                'stock_minimo' => $aggregated['stock_minimo'],
+            ],
+        ];
+    }
+
     public function updateContactWithLookup(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
     {
         $lookupCriteria = $this->buildSearchQuery($payload);
@@ -1123,6 +1210,103 @@ class AspelService extends GenericPlatformService
         }
 
         return null;
+    }
+
+    private function resolveArticlePropertyKey(): string
+    {
+        $candidate = $this->event?->meta['article_property'] ?? 'clave';
+
+        return is_string($candidate) && trim($candidate) !== '' ? trim($candidate) : 'clave';
+    }
+
+    private function resolveWarehousePropertyKey(): string
+    {
+        $candidate = $this->event?->meta['warehouse_property'] ?? 'almacen_id';
+
+        return is_string($candidate) && trim($candidate) !== '' ? trim($candidate) : 'almacen_id';
+    }
+
+    private function resolveLineItemArticleKey(array $payload, string $articleProperty): ?string
+    {
+        $candidates = [
+            Arr::get($payload, $articleProperty),
+            Arr::get($payload, 'cveArticulo'),
+            Arr::get($payload, 'clave'),
+            Arr::get($payload, 'sku'),
+        ];
+
+        return $this->resolveScalarValue($candidates);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseWarehouseIds(mixed $value): array
+    {
+        if (is_array($value)) {
+            return array_values(array_unique(array_filter(array_map(
+                static fn (mixed $item): string => is_scalar($item) ? trim((string) $item) : '',
+                $value
+            ))));
+        }
+
+        if (! is_scalar($value)) {
+            return [];
+        }
+
+        $normalized = trim((string) $value);
+        if ($normalized === '') {
+            return [];
+        }
+
+        if (str_starts_with($normalized, '[') && str_ends_with($normalized, ']')) {
+            $decoded = json_decode($normalized, true);
+            if (is_array($decoded)) {
+                return $this->parseWarehouseIds($decoded);
+            }
+        }
+
+        $parts = preg_split('/[\s,;|]+/', $normalized) ?: [];
+
+        return array_values(array_unique(array_filter(array_map('trim', $parts))));
+    }
+
+    private function resolveWarehouseInventoryEndpoint(string $articleKey): string
+    {
+        $endpoint = $this->resolveEndpoint($this->event);
+
+        if (preg_match('/\{[^}]+\}/', $endpoint) === 1) {
+            return preg_replace('/\{[^}]+\}/', rawurlencode($articleKey), $endpoint, 1) ?: $endpoint;
+        }
+
+        if (preg_match('~/almacenes/?$~i', $endpoint) === 1) {
+            return rtrim($endpoint, '/') . '/' . rawurlencode($articleKey);
+        }
+
+        return $endpoint;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $records
+     * @return array{existencias:float,stock_maximo:float,stock_minimo:float}
+     */
+    private function aggregateWarehouseInventory(array $records): array
+    {
+        $existencias = 0.0;
+        $stockMaximo = 0.0;
+        $stockMinimo = 0.0;
+
+        foreach ($records as $record) {
+            $existencias += (float) ($record['exist'] ?? 0);
+            $stockMaximo += (float) ($record['stockMax'] ?? 0);
+            $stockMinimo += (float) ($record['stockMin'] ?? 0);
+        }
+
+        return [
+            'existencias' => $existencias,
+            'stock_maximo' => $stockMaximo,
+            'stock_minimo' => $stockMinimo,
+        ];
     }
 
     private function loadCursorState(): array

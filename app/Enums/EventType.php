@@ -19,6 +19,7 @@ enum EventType: string
     case HUBSPOT_CONTACT_PROPERTY_CHANGE = 'contact.propertyChange';
     case HUBSPOT_COMPANY_PROPERTY_CHANGE = 'company.propertyChange';
     case HUBSPOT_DEAL_PROPERTY_CHANGE = 'deal.propertyChange';
+    case HUBSPOT_LINE_ITEM_PROPERTY_CHANGE = 'line_item.propertyChange';
     case HUBSPOT_OBJECT_PROPERTY_CHANGE = 'object.propertyChange';
     case HUBSPOT_PROPERTY_CHANGED_LEGACY = 'hubspot.property.changed';
     case ODOO_GET_LIST_PRICES = 'odoo.get_list_prices';
@@ -49,6 +50,7 @@ enum EventType: string
             self::HUBSPOT_CONTACT_PROPERTY_CHANGE => 'Cambio de propiedad de contacto HubSpot',
             self::HUBSPOT_COMPANY_PROPERTY_CHANGE => 'Cambio de propiedad de empresa HubSpot',
             self::HUBSPOT_DEAL_PROPERTY_CHANGE => 'Cambio de propiedad de negocio HubSpot',
+            self::HUBSPOT_LINE_ITEM_PROPERTY_CHANGE => 'Cambio de propiedad de elemento de pedido HubSpot',
             self::HUBSPOT_OBJECT_PROPERTY_CHANGE => 'Cambio de propiedad de objeto HubSpot',
             self::HUBSPOT_PROPERTY_CHANGED_LEGACY => 'Cambio de propiedad HubSpot (legacy)',
             self::ODOO_GET_LIST_PRICES => 'Obtener listas de precios Odoo',
@@ -81,6 +83,7 @@ enum EventType: string
             self::HUBSPOT_CONTACT_PROPERTY_CHANGE => 'Procesa payloads HubSpot contact.propertyChange.',
             self::HUBSPOT_COMPANY_PROPERTY_CHANGE => 'Procesa payloads HubSpot company.propertyChange.',
             self::HUBSPOT_DEAL_PROPERTY_CHANGE => 'Procesa payloads HubSpot deal.propertyChange.',
+            self::HUBSPOT_LINE_ITEM_PROPERTY_CHANGE => 'Procesa payloads HubSpot line_item.propertyChange.',
             self::HUBSPOT_OBJECT_PROPERTY_CHANGE => 'Procesa payloads HubSpot object.propertyChange.',
             self::HUBSPOT_PROPERTY_CHANGED_LEGACY => 'Alias legacy conservado por compatibilidad con configuraciones previas.',
             self::ODOO_GET_LIST_PRICES => 'Obtiene listas de precios Odoo para productos o variantes.',
@@ -101,6 +104,7 @@ enum EventType: string
             self::HUBSPOT_CONTACT_PROPERTY_CHANGE,
             self::HUBSPOT_COMPANY_PROPERTY_CHANGE,
             self::HUBSPOT_DEAL_PROPERTY_CHANGE,
+            self::HUBSPOT_LINE_ITEM_PROPERTY_CHANGE,
             self::HUBSPOT_OBJECT_PROPERTY_CHANGE => 'HubSpot',
             self::HUBSPOT_PROPERTY_CHANGED_LEGACY => 'Legacy',
             self::ODOO_GET_LIST_PRICES,
@@ -125,6 +129,7 @@ enum EventType: string
             self::HUBSPOT_CONTACT_PROPERTY_CHANGE,
             self::HUBSPOT_COMPANY_PROPERTY_CHANGE,
             self::HUBSPOT_DEAL_PROPERTY_CHANGE,
+            self::HUBSPOT_LINE_ITEM_PROPERTY_CHANGE,
             self::HUBSPOT_OBJECT_PROPERTY_CHANGE,
             self::HUBSPOT_PROPERTY_CHANGED_LEGACY => ['hubspot'],
             self::ODOO_GET_LIST_PRICES,
@@ -168,6 +173,7 @@ enum EventType: string
             self::HUBSPOT_CONTACT_PROPERTY_CHANGE => \App\Events\Object\UpdateObjectEvent::class,
             self::HUBSPOT_COMPANY_PROPERTY_CHANGE => \App\Events\Object\UpdateObjectEvent::class,
             self::HUBSPOT_DEAL_PROPERTY_CHANGE => \App\Events\Object\UpdateObjectEvent::class,
+            self::HUBSPOT_LINE_ITEM_PROPERTY_CHANGE => \App\Events\Object\UpdateObjectEvent::class,
             self::HUBSPOT_OBJECT_PROPERTY_CHANGE => \App\Events\Object\UpdateObjectEvent::class,
             self::HUBSPOT_PROPERTY_CHANGED_LEGACY => \App\Events\Object\UpdateObjectEvent::class,
             self::ODOO_GET_LIST_PRICES => \App\Events\Odoo\GetListPricesEvent::class,

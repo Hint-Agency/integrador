@@ -173,6 +173,17 @@ class ProcessNextEventJob implements ShouldQueue
             $requested[] = $this->normalizeHubspotPropertyKey($sourceKey);
         }
 
+        $requiredProperties = $mappingEvent->meta['required_source_properties'] ?? [];
+        if (is_array($requiredProperties)) {
+            foreach ($requiredProperties as $requiredProperty) {
+                if (! is_scalar($requiredProperty)) {
+                    continue;
+                }
+
+                $requested[] = $this->normalizeHubspotPropertyKey((string) $requiredProperty);
+            }
+        }
+
         $changedProperty = $payload['propertyName'] ?? ($payload['property_name'] ?? null);
         if (is_scalar($changedProperty)) {
             $requested[] = $this->normalizeHubspotPropertyKey((string) $changedProperty);

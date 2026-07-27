@@ -59,6 +59,11 @@ class HubspotService extends BaseService
         return $this->success('Company property change received.', $this->buildPropertyChangePayload($subscriptionType, $payload));
     }
 
+    public function lineItemPropertyChange(string $subscriptionType, array $payload, $record): array
+    {
+        return $this->success('Line item property change received.', $this->buildPropertyChangePayload($subscriptionType, $payload));
+    }
+
     public function objectPropertyChange(string $subscriptionType, array $payload, $record): array
     {
         return $this->success('Object property change received.', $this->buildPropertyChangePayload($subscriptionType, $payload));
@@ -2070,6 +2075,56 @@ class HubspotService extends BaseService
         ]);
     }
 
+    public function syncLineItemExecutionResponse(array $payload): array
+    {
+        $lineItemId = $this->resolveHubspotObjectIdFromPayload($payload);
+        if ($lineItemId === null) {
+            return [
+                'success' => false,
+                'message' => 'Missing HubSpot line item id for response write-back.',
+                'data' => [
+                    'required_context' => [
+                        'hubspot_object_id',
+                        'hubspotObjectId',
+                        'hs_object_id',
+                        'objectId',
+                        'id',
+                    ],
+                    'received_keys' => array_keys($payload),
+                ],
+            ];
+        }
+
+        $properties = $this->buildHubspotLineItemPropertiesFromResponse($payload);
+
+        if ($properties === []) {
+            return $this->success('No mapped HubSpot line item properties found in destination response.', [
+                'line_item_id' => $lineItemId,
+                'destination_response_keys' => $this->extractDestinationResponseKeys($payload),
+                'updated_properties' => [],
+            ]);
+        }
+
+        $response = $this->hubspotApi->updateObject('line_items', $lineItemId, $properties);
+        if (! $response['success']) {
+            return [
+                'success' => false,
+                'message' => 'Failed to update HubSpot line item from destination response.',
+                'data' => [
+                    'error' => $response['error'] ?? null,
+                    'line_item_id' => $lineItemId,
+                    'attempted_properties' => $properties,
+                ],
+            ];
+        }
+
+        return $this->success('HubSpot line item updated from destination response.', [
+            'line_item_id' => $lineItemId,
+            'updated_properties' => $properties,
+            'hubspot_response' => $response['data'] ?? [],
+        ]);
+    }
+
     public function syncAspelContactToHubspot(array $payload): array
     {
         $result = $this->updateAspelContactInHubspot($payload);
@@ -2908,10 +2963,31 @@ class HubspotService extends BaseService
     {
         $candidates = [
             Arr::get($payload, 'hubspot_contact_id'),
-            Arr::get($payload, 'hubspot_object_id'),
             Arr::get($payload, 'contact.id'),
             Arr::get($payload, 'contact.hubspot_id'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (! is_scalar($candidate)) {
+                continue;
+            }
+
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return $this->resolveHubspotObjectIdFromPayload($payload);
+    }
+
+    private function resolveHubspotObjectIdFromPayload(array $payload): ?string
+    {
+        $candidates = [
+            Arr::get($payload, 'hubspot_object_id'),
             Arr::get($payload, 'hubspot_id'),
+            Arr::get($payload, 'hubspotObjectId'),
+            Arr::get($payload, 'hs_object_id'),
             Arr::get($payload, 'objectId'),
             Arr::get($payload, 'id'),
         ];
@@ -3130,6 +3206,7 @@ class HubspotService extends BaseService
 
         return match ($method) {
             'syncContactExecutionResponse' => 'write-back a HubSpot',
+            'syncLineItemExecutionResponse' => 'write-back de line item a HubSpot',
             'syncAspelContactToHubspot' => 'sincronizacion de ASPEL a HubSpot',
             'updateAspelContactInHubspot' => 'actualizacion de contacto ASPEL en HubSpot',
             'createAspelContactInHubspot' => 'creacion de contacto ASPEL en HubSpot',
@@ -3580,6 +3657,36 @@ class HubspotService extends BaseService
             static fn (mixed $key): string => (string) $key,
             array_keys($responseData)
         ));
+    }
+
+    /**
+     * @return array<string, scalar|null>
+     */
+    private function buildHubspotLineItemPropertiesFromResponse(array $payload): array
+    {
+        $responseData = Arr::get($payload, 'destination_response.data', []);
+        $responseNestedData = Arr::get($responseData, 'data', []);
+
+        $properties = [];
+
+        foreach ([
+            'existencias' => 'existencias',
+            'stock_maximo' => 'stock_maximo',
+            'stock_minimo' => 'stock_minimo',
+        ] as $hubspotKey => $sourceKey) {
+            $value = $this->firstMappedValue([
+                Arr::get($responseData, $sourceKey),
+                Arr::get($responseNestedData, $sourceKey),
+            ]);
+
+            if ($value === null) {
+                continue;
+            }
+
+            $properties[$hubspotKey] = $this->normalizeHubspotPropertyValue($value);
+        }
+
+        return $properties;
     }
 
     private function buildPropertyChangePayload(string $subscriptionType, array $payload): array
