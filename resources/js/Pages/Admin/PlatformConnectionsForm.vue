@@ -31,6 +31,7 @@ const form = useForm({
     signature_header: props.connection?.signature_header ?? '',
     webhook_secret: '',
     access_token: '',
+    app_id: props.connection?.settings?.app_id ?? '',
     api_key: '',
     username: '',
     password: '',
@@ -158,6 +159,7 @@ const submit = () => {
             password: form.password || undefined,
         },
         settings: {
+            app_id: form.app_id === '' ? null : String(form.app_id).trim(),
             contact_properties: contactProperties,
             send_path: form.send_path || null,
             http_method: form.http_method,
@@ -217,6 +219,18 @@ const removeContactProperty = (index) => {
                     <p>Webhook, token y propiedades del contacto a consultar.</p>
                 </header>
                 <div class="grid">
+                    <label>
+                        <span>App ID</span>
+                        <input
+                            v-model="form.app_id"
+                            type="text"
+                            inputmode="numeric"
+                            placeholder="ID numérico de la app"
+                            required
+                        >
+                        <small class="hint">Se comprobará con el access token guardado o con el nuevo token capturado.</small>
+                        <small v-if="form.errors['settings.app_id']" class="field-error">{{ form.errors['settings.app_id'] }}</small>
+                    </label>
                     <label><span>Base URL</span><input v-model="form.base_url" type="url" placeholder="https://api.hubapi.com"><small v-if="form.errors.base_url" class="field-error">{{ form.errors.base_url }}</small></label>
                     <label><span>Header de firma</span><input v-model="form.signature_header" type="text" placeholder="x-signature"><small v-if="form.errors.signature_header" class="field-error">{{ form.errors.signature_header }}</small></label>
                     <label><span>Timeout (segundos)</span><input v-model="form.timeout_seconds" type="number" min="1"></label>
@@ -239,7 +253,10 @@ const removeContactProperty = (index) => {
                 <div v-if="isEdit && (connection?.has_webhook_secret || connection?.has_credentials)" class="credentials-bar">
                     <div class="credentials-copy">
                         <strong>Credenciales</strong>
-                        <small class="hint ok">Ya configuradas. Ábrelas solo si necesitas reemplazarlas.</small>
+                        <small v-if="connection?.settings?.credential_validation?.app_id" class="hint ok">
+                            App ID {{ connection.settings.credential_validation.app_id }} validado con HubSpot.
+                        </small>
+                        <small v-else class="hint">Ábrelas para validar el App ID con HubSpot.</small>
                     </div>
                     <button
                         type="button"
@@ -255,6 +272,7 @@ const removeContactProperty = (index) => {
                         <input
                             v-model="form.webhook_secret"
                             type="password"
+                            autocomplete="new-password"
                             :placeholder="isEdit ? 'solo para reemplazar' : 'Webhook secret'"
                         >
                     </label>
@@ -263,8 +281,10 @@ const removeContactProperty = (index) => {
                         <input
                             v-model="form.access_token"
                             type="password"
+                            autocomplete="new-password"
                             :placeholder="isEdit ? 'solo para reemplazar' : 'HubSpot token'"
                         >
+                        <small v-if="form.errors['credentials.access_token']" class="field-error">{{ form.errors['credentials.access_token'] }}</small>
                     </label>
                 </div>
                 <div class="repeater-block">

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\AutomationFlow;
 use App\Models\Client;
 use App\Models\MessageRule;
 use Illuminate\Http\RedirectResponse;
@@ -11,48 +12,63 @@ use Illuminate\Validation\Rule;
 
 class MessageRuleManagementController extends Controller
 {
-    public function store(Request $request, Client $client): RedirectResponse
+    public function store(Request $request, Client $client, AutomationFlow $flow): RedirectResponse
     {
+        abort_unless($flow->client_id === $client->id, 404);
         $data = $this->validatePayload($request, $client);
 
         MessageRule::query()->create([
             'client_id' => $client->id,
+            'automation_flow_id' => $flow->id,
             'treble_template_id' => $data['treble_template_id'],
             'name' => $data['name'],
             'priority' => (int) ($data['priority'] ?? 100),
-            'trigger_property' => $data['trigger_property'],
-            'trigger_value' => $data['trigger_value'] ?? null,
+            'trigger_property' => $flow->trigger_property,
+            'trigger_value' => $flow->trigger_value,
             'conditions' => $this->normalizeConditions($data['conditions'] ?? []),
             'active' => (bool) ($data['active'] ?? true),
         ]);
 
-        return redirect()->route('admin.clients.rules', $client)->with('success', 'Regla creada correctamente.');
+        return redirect()->route('admin.clients.flows.edit', [$client, $flow])
+            ->with('success', 'Regla Treble creada correctamente.');
     }
 
-    public function update(Request $request, Client $client, MessageRule $rule): RedirectResponse
-    {
-        abort_unless($rule->client_id === $client->id, 404);
+    public function update(
+        Request $request,
+        Client $client,
+        AutomationFlow $flow,
+        MessageRule $rule
+    ): RedirectResponse {
+        abort_unless(
+            $flow->client_id === $client->id && $rule->automation_flow_id === $flow->id,
+            404
+        );
         $data = $this->validatePayload($request, $client);
 
         $rule->update([
             'treble_template_id' => $data['treble_template_id'],
             'name' => $data['name'],
             'priority' => (int) ($data['priority'] ?? 100),
-            'trigger_property' => $data['trigger_property'],
-            'trigger_value' => $data['trigger_value'] ?? null,
+            'trigger_property' => $flow->trigger_property,
+            'trigger_value' => $flow->trigger_value,
             'conditions' => $this->normalizeConditions($data['conditions'] ?? []),
             'active' => (bool) ($data['active'] ?? false),
         ]);
 
-        return redirect()->route('admin.clients.rules', $client)->with('success', 'Regla actualizada correctamente.');
+        return redirect()->route('admin.clients.flows.edit', [$client, $flow])
+            ->with('success', 'Regla Treble actualizada correctamente.');
     }
 
-    public function destroy(Client $client, MessageRule $rule): RedirectResponse
+    public function destroy(Client $client, AutomationFlow $flow, MessageRule $rule): RedirectResponse
     {
-        abort_unless($rule->client_id === $client->id, 404);
+        abort_unless(
+            $flow->client_id === $client->id && $rule->automation_flow_id === $flow->id,
+            404
+        );
         $rule->delete();
 
-        return redirect()->route('admin.clients.rules', $client)->with('success', 'Regla eliminada correctamente.');
+        return redirect()->route('admin.clients.flows.edit', [$client, $flow])
+            ->with('success', 'Regla Treble eliminada correctamente.');
     }
 
     private function validatePayload(Request $request, Client $client): array
@@ -64,8 +80,6 @@ class MessageRuleManagementController extends Controller
             ],
             'name' => ['required', 'string', 'max:255'],
             'priority' => ['nullable', 'integer'],
-            'trigger_property' => ['required', 'string', 'max:255'],
-            'trigger_value' => ['nullable', 'string', 'max:255'],
             'conditions' => ['sometimes', 'array'],
             'conditions.match' => ['nullable', Rule::in(['all', 'any'])],
             'conditions.groups' => ['sometimes', 'array'],

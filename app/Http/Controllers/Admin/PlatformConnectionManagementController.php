@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\PlatformConnection;
+use App\Services\Hubspot\HubspotCredentialValidationService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -14,6 +15,10 @@ use Illuminate\Validation\ValidationException;
 
 class PlatformConnectionManagementController extends Controller
 {
+    public function __construct(
+        private readonly HubspotCredentialValidationService $hubspotCredentialValidationService
+    ) {}
+
     public function store(Request $request, Client $client): RedirectResponse
     {
         $data = $this->validatePayload($request, $client);
@@ -95,11 +100,55 @@ class PlatformConnectionManagementController extends Controller
         $errors = [];
 
         if ($data['platform_type'] === 'hubspot') {
-            $hasToken = filled($credentials['access_token'] ?? null)
-                || filled($connection?->credentials['access_token'] ?? null);
+            $newToken = trim((string) ($credentials['access_token'] ?? ''));
+            $existingToken = trim((string) ($connection?->credentials['access_token'] ?? ''));
+            $accessToken = $newToken !== '' ? $newToken : $existingToken;
+            $appId = $settings['app_id'] ?? $connection?->settings['app_id'] ?? null;
+            $normalizedAppId = filter_var($appId, FILTER_VALIDATE_INT, [
+                'options' => ['min_range' => 1],
+            ]);
 
-            if (! $hasToken) {
+            if ($accessToken === '') {
                 $errors['credentials.access_token'] = 'HubSpot requiere access token.';
+            }
+
+            if (! filled($appId)) {
+                $errors['settings.app_id'] = 'HubSpot requiere el App ID.';
+            } elseif ($normalizedAppId === false) {
+                $errors['settings.app_id'] = 'El App ID debe ser un número entero mayor a cero.';
+            }
+
+            if ($errors === []) {
+                $data['settings'] = array_merge($settings, ['app_id' => $normalizedAppId]);
+                $settings = $data['settings'];
+            }
+
+            if ($errors === [] && $this->shouldValidateHubspotCredentials($connection, $newToken, $normalizedAppId)) {
+                $validation = $this->hubspotCredentialValidationService->validateAppId(
+                    (string) ($data['base_url'] ?? $connection?->base_url ?: 'https://api.hubapi.com'),
+                    $accessToken,
+                    $normalizedAppId,
+                    (int) ($settings['timeout_seconds'] ?? $connection?->settings['timeout_seconds'] ?? 20)
+                );
+
+                if (! ($validation['success'] ?? false)) {
+                    $errorField = ($validation['reason'] ?? null) === 'app_id_mismatch'
+                        ? 'settings.app_id'
+                        : 'credentials.access_token';
+                    $errors[$errorField] = (string) ($validation['message'] ?? 'No fue posible validar las credenciales de HubSpot.');
+                } else {
+                    $data['settings'] = array_merge($settings, [
+                        'app_id' => $normalizedAppId,
+                        'credential_validation' => [
+                            'app_id' => $validation['app_id'],
+                            'hub_id' => $validation['hub_id'],
+                            'expires_in' => $validation['expires_in'],
+                            'credential_type' => $validation['credential_type'],
+                            'validated_at' => now()->toISOString(),
+                        ],
+                    ]);
+                    $settings = $data['settings'];
+                }
             }
         }
 
@@ -129,6 +178,21 @@ class PlatformConnectionManagementController extends Controller
         }
 
         return $data;
+    }
+
+    private function shouldValidateHubspotCredentials(
+        ?PlatformConnection $connection,
+        string $newToken,
+        int $appId
+    ): bool {
+        if ($connection === null || $newToken !== '') {
+            return true;
+        }
+
+        $currentAppId = (int) ($connection->settings['app_id'] ?? 0);
+        $validatedAppId = (int) ($connection->settings['credential_validation']['app_id'] ?? 0);
+
+        return $currentAppId !== $appId || $validatedAppId !== $appId;
     }
 
     private function buildAttributes(Client $client, array $data, ?PlatformConnection $connection = null): array

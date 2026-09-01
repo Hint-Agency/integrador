@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\AutomationFlow;
 use App\Models\Client;
+use App\Models\HubspotOwner;
 use App\Models\MessageRule;
 use App\Models\PlatformConnection;
 use App\Models\Record;
@@ -72,7 +74,7 @@ class LiteAdminController extends Controller
                     'has_credentials' => ! empty($connection->credentials ?? []),
                     'has_webhook_secret' => filled($connection->webhook_secret),
                     'status_webhook_url' => $connection->platform_type === 'treble'
-                        ? url('/webhooks/' . $client->slug . '/treble/status')
+                        ? url('/webhooks/'.$client->slug.'/treble/status')
                         : null,
                 ];
             });
@@ -114,7 +116,7 @@ class LiteAdminController extends Controller
                     ? $connection->getAttribute('webhook_secret')
                     : null,
                 'status_webhook_url' => $connection->platform_type === 'treble'
-                    ? url('/webhooks/' . $client->slug . '/treble/status')
+                    ? url('/webhooks/'.$client->slug.'/treble/status')
                     : null,
             ],
         ]);
@@ -169,72 +171,174 @@ class LiteAdminController extends Controller
         ]);
     }
 
-    public function clientRules(Client $client)
+    public function clientFlowRulesCreate(Client $client, AutomationFlow $flow)
     {
-        $rules = $client->messageRules()
-            ->with('trebleTemplate:id,name,external_template_id')
-            ->orderByDesc('priority')
-            ->orderBy('name')
-            ->get()
-            ->map(function (MessageRule $rule): array {
-                $conditionBuilder = $this->buildConditionBuilder($rule->conditions ?? []);
+        abort_unless($flow->client_id === $client->id, 404);
 
-                return [
-                    'id' => $rule->id,
-                    'name' => $rule->name,
-                    'priority' => $rule->priority,
-                    'trigger_property' => $rule->trigger_property,
-                    'trigger_value' => $rule->trigger_value,
-                    'conditions' => $rule->conditions ?? [],
-                    'condition_builder' => $conditionBuilder,
-                    'group_count' => count($conditionBuilder['groups']),
-                    'rule_count' => collect($conditionBuilder['groups'])->sum(fn (array $group): int => count($group['rules'] ?? [])),
-                    'active' => (bool) $rule->active,
-                    'treble_template_id' => $rule->treble_template_id,
-                    'treble_template' => $rule->trebleTemplate ? [
-                        'id' => $rule->trebleTemplate->id,
-                        'name' => $rule->trebleTemplate->name,
-                        'external_template_id' => $rule->trebleTemplate->external_template_id,
-                    ] : null,
-                ];
-            });
-
-        return inertia('Admin/MessageRules', [
-            'client' => $client->only(['id', 'name', 'slug']),
-            'rules' => $rules,
-            'templates' => $client->trebleTemplates()->where('active', true)->orderBy('name')->get(['id', 'name', 'external_template_id']),
-        ]);
-    }
-
-    public function clientRulesCreate(Client $client)
-    {
         return inertia('Admin/MessageRulesForm', [
             'mode' => 'create',
             'client' => $client->only(['id', 'name', 'slug']),
+            'flow' => $flow->only(['id', 'name', 'trigger_property', 'trigger_value']),
             'rule' => null,
-            'templates' => $client->trebleTemplates()->where('active', true)->orderBy('name')->get(['id', 'name', 'external_template_id']),
+            'templates' => $this->templateOptions($client),
         ]);
     }
 
-    public function clientRulesEdit(Client $client, MessageRule $rule)
+    public function clientFlowRulesEdit(Client $client, AutomationFlow $flow, MessageRule $rule)
     {
-        abort_unless($rule->client_id === $client->id, 404);
+        abort_unless($flow->client_id === $client->id && $rule->automation_flow_id === $flow->id, 404);
 
         return inertia('Admin/MessageRulesForm', [
             'mode' => 'edit',
             'client' => $client->only(['id', 'name', 'slug']),
+            'flow' => $flow->only(['id', 'name', 'trigger_property', 'trigger_value']),
             'rule' => [
                 'id' => $rule->id,
                 'name' => $rule->name,
                 'priority' => $rule->priority,
-                'trigger_property' => $rule->trigger_property,
-                'trigger_value' => $rule->trigger_value,
                 'conditions' => $rule->conditions ?? [],
                 'condition_builder' => $this->buildConditionBuilder($rule->conditions ?? []),
                 'active' => (bool) $rule->active,
                 'treble_template_id' => $rule->treble_template_id,
             ],
-            'templates' => $client->trebleTemplates()->where('active', true)->orderBy('name')->get(['id', 'name', 'external_template_id']),
+            'templates' => $this->templateOptions($client),
+        ]);
+    }
+
+    public function clientOwners(Client $client)
+    {
+        return inertia('Admin/HubspotOwners', [
+            'client' => $client->only(['id', 'name', 'slug']),
+            'owners' => $client->hubspotOwners()
+                ->withCount('automationFlows')
+                ->orderBy('name')
+                ->get()
+                ->map(fn (HubspotOwner $owner): array => [
+                    'id' => $owner->id,
+                    'name' => $owner->name,
+                    'external_owner_id' => $owner->external_owner_id,
+                    'email' => $owner->email,
+                    'active' => (bool) $owner->active,
+                    'automation_flows_count' => $owner->automation_flows_count,
+                ]),
+        ]);
+    }
+
+    public function clientOwnersCreate(Client $client)
+    {
+        return inertia('Admin/HubspotOwnersForm', [
+            'mode' => 'create',
+            'client' => $client->only(['id', 'name', 'slug']),
+            'owner' => null,
+        ]);
+    }
+
+    public function clientOwnersEdit(Client $client, HubspotOwner $owner)
+    {
+        abort_unless($owner->client_id === $client->id, 404);
+
+        return inertia('Admin/HubspotOwnersForm', [
+            'mode' => 'edit',
+            'client' => $client->only(['id', 'name', 'slug']),
+            'owner' => $owner->only(['id', 'name', 'external_owner_id', 'email', 'active']),
+        ]);
+    }
+
+    public function clientFlows(Client $client)
+    {
+        return inertia('Admin/AutomationFlows', [
+            'client' => $client->only(['id', 'name', 'slug']),
+            'flows' => $client->automationFlows()
+                ->with([
+                    'owners:id,name,external_owner_id',
+                    'messageRules' => fn ($query) => $query
+                        ->with('trebleTemplate:id,name,external_template_id')
+                        ->orderByDesc('priority'),
+                ])
+                ->orderByDesc('priority')
+                ->orderBy('name')
+                ->get()
+                ->map(function (AutomationFlow $flow): array {
+                    $conditionBuilder = $this->buildConditionBuilder($flow->conditions ?? []);
+
+                    return [
+                        'id' => $flow->id,
+                        'name' => $flow->name,
+                        'priority' => $flow->priority,
+                        'trigger_property' => $flow->trigger_property,
+                        'trigger_value' => $flow->trigger_value,
+                        'group_count' => count($conditionBuilder['groups']),
+                        'condition_count' => collect($conditionBuilder['groups'])
+                            ->sum(fn (array $group): int => count($group['rules'] ?? [])),
+                        'owner_assignment_enabled' => (bool) $flow->owner_assignment_enabled,
+                        'owner_property' => $flow->owner_property,
+                        'existing_owner_behavior' => $flow->existing_owner_behavior ?: 'stop',
+                        'owners' => $flow->owners->map->only(['id', 'name', 'external_owner_id'])->values(),
+                        'continue_to_treble' => (bool) $flow->continue_to_treble,
+                        'message_rules_count' => $flow->messageRules->count(),
+                        'message_rules' => $flow->messageRules->map(fn (MessageRule $rule): array => [
+                            'id' => $rule->id,
+                            'name' => $rule->name,
+                            'priority' => $rule->priority,
+                            'active' => (bool) $rule->active,
+                            'treble_template' => $rule->trebleTemplate?->only(['id', 'name', 'external_template_id']),
+                        ])->values(),
+                        'active' => (bool) $flow->active,
+                    ];
+                }),
+        ]);
+    }
+
+    public function clientFlowsCreate(Client $client)
+    {
+        return inertia('Admin/AutomationFlowsForm', [
+            'mode' => 'create',
+            'client' => $client->only(['id', 'name', 'slug']),
+            'flow' => null,
+            'owners' => $this->ownerOptions($client),
+            'messageRules' => [],
+        ]);
+    }
+
+    public function clientFlowsEdit(Client $client, AutomationFlow $flow)
+    {
+        abort_unless($flow->client_id === $client->id, 404);
+        $flow->load(['messageRules.trebleTemplate']);
+
+        return inertia('Admin/AutomationFlowsForm', [
+            'mode' => 'edit',
+            'client' => $client->only(['id', 'name', 'slug']),
+            'flow' => [
+                'id' => $flow->id,
+                'name' => $flow->name,
+                'priority' => $flow->priority,
+                'trigger_property' => $flow->trigger_property,
+                'trigger_value' => $flow->trigger_value,
+                'condition_builder' => $this->buildConditionBuilder($flow->conditions ?? []),
+                'owner_assignment_enabled' => (bool) $flow->owner_assignment_enabled,
+                'owner_property' => $flow->owner_property,
+                'owner_selection_strategy' => $flow->owner_selection_strategy,
+                'existing_owner_behavior' => $flow->existing_owner_behavior ?: 'stop',
+                'owner_ids' => $flow->owners()->pluck('hubspot_owners.id')->all(),
+                'continue_to_treble' => (bool) $flow->continue_to_treble,
+                'active' => (bool) $flow->active,
+            ],
+            'owners' => $this->ownerOptions($client, $flow),
+            'messageRules' => $flow->messageRules
+                ->sortByDesc('priority')
+                ->map(function (MessageRule $rule): array {
+                    $conditionBuilder = $this->buildConditionBuilder($rule->conditions ?? []);
+
+                    return [
+                        'id' => $rule->id,
+                        'name' => $rule->name,
+                        'priority' => $rule->priority,
+                        'active' => (bool) $rule->active,
+                        'condition_count' => collect($conditionBuilder['groups'])
+                            ->sum(fn (array $group): int => count($group['rules'] ?? [])),
+                        'treble_template' => $rule->trebleTemplate?->only(['id', 'name', 'external_template_id']),
+                    ];
+                })->values(),
         ]);
     }
 
@@ -479,5 +583,28 @@ class LiteAdminController extends Controller
                 ]] : $rules,
             ]],
         ];
+    }
+
+    private function ownerOptions(Client $client, ?AutomationFlow $flow = null)
+    {
+        $selectedIds = $flow?->owners()->pluck('hubspot_owners.id')->all() ?? [];
+
+        return $client->hubspotOwners()
+            ->where(function ($query) use ($selectedIds): void {
+                $query->where('active', true);
+                if ($selectedIds !== []) {
+                    $query->orWhereIn('id', $selectedIds);
+                }
+            })
+            ->orderBy('name')
+            ->get(['id', 'name', 'external_owner_id', 'email', 'active']);
+    }
+
+    private function templateOptions(Client $client)
+    {
+        return $client->trebleTemplates()
+            ->where('active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'external_template_id']);
     }
 }

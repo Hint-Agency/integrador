@@ -2,6 +2,7 @@
 
 namespace App\Services\Lite;
 
+use App\Models\AutomationFlow;
 use App\Models\MessageRule;
 
 class MessageRuleResolver
@@ -11,6 +12,7 @@ class MessageRuleResolver
         $rules = MessageRule::query()
             ->with('trebleTemplate')
             ->where('client_id', $clientId)
+            ->whereNull('automation_flow_id')
             ->where('active', true)
             ->where('trigger_property', $triggerProperty)
             ->orderByDesc('priority')
@@ -30,6 +32,58 @@ class MessageRuleResolver
         }
 
         return null;
+    }
+
+    public function resolveForFlow(AutomationFlow $flow, array $contactProperties): ?MessageRule
+    {
+        $rules = $flow->messageRules()
+            ->with('trebleTemplate')
+            ->where('active', true)
+            ->orderByDesc('priority')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($rules as $rule) {
+            if ($this->matchesConditions($rule->conditions, $contactProperties)) {
+                return $rule;
+            }
+        }
+
+        return null;
+    }
+
+    public function requiredProperties(int $clientId, string $triggerProperty): array
+    {
+        $rules = MessageRule::query()
+            ->where('client_id', $clientId)
+            ->where('active', true)
+            ->where('trigger_property', $triggerProperty)
+            ->get(['conditions']);
+
+        $properties = collect([$triggerProperty]);
+
+        foreach ($rules as $rule) {
+            $conditions = $this->normalizeConditions($rule->conditions);
+
+            foreach ($conditions['groups'] as $group) {
+                foreach ($group['rules'] ?? [] as $condition) {
+                    $properties->push($condition['property'] ?? null);
+                }
+            }
+
+        }
+
+        return $properties
+            ->filter(fn (mixed $property): bool => is_string($property) && trim($property) !== '')
+            ->map(fn (string $property): string => trim($property))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    public function matchesConditions(mixed $conditions, array $contactProperties): bool
+    {
+        return $this->matchesConditionSet($this->normalizeConditions($conditions), $contactProperties);
     }
 
     private function matchesValue(mixed $expectedValue, mixed $actualValue): bool
@@ -115,7 +169,7 @@ class MessageRuleResolver
         ), fn (string $item): bool => $item !== ''));
     }
 
-    private function normalizeConditions(mixed $conditions): array
+    public function normalizeConditions(mixed $conditions): array
     {
         if (! is_array($conditions)) {
             return [

@@ -7,6 +7,7 @@ import { computed } from 'vue';
 const props = defineProps({
     mode: { type: String, required: true },
     client: { type: Object, required: true },
+    flow: { type: Object, required: true },
     rule: { type: Object, default: null },
     templates: { type: Array, required: true },
 });
@@ -90,8 +91,6 @@ const form = useForm({
     treble_template_id: props.rule?.treble_template_id ?? props.templates[0]?.id ?? '',
     name: props.rule?.name ?? '',
     priority: props.rule?.priority ?? 100,
-    trigger_property: props.rule?.trigger_property ?? 'plantilla_de_whatsapp',
-    trigger_value: props.rule?.trigger_value ?? '',
     conditions: toConditionBuilder(props.rule?.condition_builder ?? props.rule?.conditions ?? []),
     active: props.rule?.active ?? true,
 });
@@ -147,25 +146,31 @@ const submit = () => {
         treble_template_id: Number(form.treble_template_id),
         name: form.name,
         priority: Number(form.priority),
-        trigger_property: form.trigger_property.trim(),
-        trigger_value: form.trigger_value.trim() || null,
         conditions: normalizeConditions(),
         active: !!form.active,
     }));
 
     if (isEdit.value) {
-        form.put(`/admin/clients/${props.client.id}/rules/${props.rule.id}`);
+        form.put(`/admin/clients/${props.client.id}/flows/${props.flow.id}/rules/${props.rule.id}`);
         return;
     }
 
-    form.post(`/admin/clients/${props.client.id}/rules`);
+    form.post(`/admin/clients/${props.client.id}/flows/${props.flow.id}/rules`);
 };
 </script>
 
 <template>
-    <AdminLayout :title="isEdit ? 'Editar regla' : 'Nueva regla'">
+    <AdminLayout :title="isEdit ? 'Editar regla Treble' : 'Nueva regla Treble'">
         <ClientTabs :client="client" />
         <form class="form" @submit.prevent="submit">
+            <section class="flow-context">
+                <div>
+                    <strong>Paso 2 de {{ flow.name }}</strong>
+                    <p>Se evalúa después de asignar propietario. Hereda el disparador <code>{{ flow.trigger_property }}</code> = <code>{{ flow.trigger_value || '(vacío)' }}</code>.</p>
+                </div>
+                <Link :href="`/admin/clients/${client.id}/flows/${flow.id}/edit`">Volver al flujo</Link>
+            </section>
+
             <div class="grid">
                 <label><span>Nombre</span><input v-model="form.name" type="text" required></label>
                 <label><span>Plantilla Treble</span><select v-model="form.treble_template_id"><option v-for="template in templates" :key="template.id" :value="template.id">{{ template.name }} ({{ template.external_template_id }})</option></select></label>
@@ -176,21 +181,8 @@ const submit = () => {
             <section class="section">
                 <header class="section-head">
                     <div>
-                        <h2>Disparador principal</h2>
-                        <p>Este par decide qué reglas compiten cuando cambia una propiedad en HubSpot.</p>
-                    </div>
-                </header>
-                <div class="grid">
-                    <label><span>Trigger property</span><input v-model="form.trigger_property" type="text" required placeholder="plantilla_de_whatsapp"></label>
-                    <label><span>Trigger value</span><input v-model="form.trigger_value" type="text" placeholder="Bienvenida"></label>
-                </div>
-            </section>
-
-            <section class="section">
-                <header class="section-head">
-                    <div>
                         <h2>Condiciones adicionales</h2>
-                        <p>Aquí ya puedes combinar grupos. La regla completa puede exigir que se cumplan todos los grupos o que baste con uno.</p>
+                        <p>Estas condiciones se evalúan con el contacto ya asignado. La primera regla coincidente por prioridad enviará su plantilla.</p>
                     </div>
                     <button type="button" class="ghost-button" @click="addGroup">Agregar grupo</button>
                 </header>
@@ -257,7 +249,7 @@ const submit = () => {
             </section>
 
             <div class="actions">
-                <Link :href="`/admin/clients/${client.id}/rules`">Cancelar</Link>
+                <Link :href="`/admin/clients/${client.id}/flows/${flow.id}/edit`">Cancelar</Link>
                 <button type="submit" :disabled="form.processing">Guardar</button>
             </div>
         </form>
@@ -266,6 +258,9 @@ const submit = () => {
 
 <style scoped>
 .form { display: grid; gap: 14px; }
+.flow-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-left: 4px solid #2563eb; background: #eff6ff; padding: 12px 14px; }
+.flow-context p { margin: 4px 0 0; color: #334155; font-size: 14px; }
+.flow-context a { color: #1d4ed8; text-decoration: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 .section { display: grid; gap: 12px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; }
 .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; }

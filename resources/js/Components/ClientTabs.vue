@@ -10,8 +10,9 @@ const currentUrl = page.url ?? '';
 
 const links = [
     { href: `/admin/clients/${props.client.id}/connections`, label: 'Conexiones' },
-    { href: `/admin/clients/${props.client.id}/templates`, label: 'Plantillas' },
-    { href: `/admin/clients/${props.client.id}/rules`, label: 'Reglas' },
+    { href: `/admin/clients/${props.client.id}/owners`, label: 'Propietarios' },
+    { href: `/admin/clients/${props.client.id}/templates`, label: 'Plantillas Treble' },
+    { href: `/admin/clients/${props.client.id}/flows`, label: 'Flujos' },
     { href: `/admin/clients/${props.client.id}/records`, label: 'Records' },
 ];
 </script>

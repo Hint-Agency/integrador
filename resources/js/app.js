@@ -3,7 +3,16 @@ import './bootstrap';
 import { createApp, h } from 'vue';
 import { createInertiaApp } from '@inertiajs/vue3';
 
+const pageElement = document.querySelector('script[data-page="app"]');
+
+if (!pageElement?.textContent) {
+    throw new Error('The initial Inertia page payload is missing.');
+}
+
+const initialPage = JSON.parse(pageElement.textContent);
+
 createInertiaApp({
+    page: initialPage,
     resolve: (name) => {
         const pages = import.meta.glob('./Pages/**/*.vue', { eager: true });
         return pages[`./Pages/${name}.vue`];
@@ -13,19 +22,4 @@ createInertiaApp({
             .use(plugin)
             .mount(el);
     },
-});
-
-// Fix for Inertia Laravel 3.x rendering data-page in script tag instead of div
-document.addEventListener('DOMContentLoaded', function() {
-    const appDiv = document.getElementById('app');
-    if (appDiv && !appDiv.dataset.page) {
-        const scriptTag = document.querySelector('script[data-page]');
-        if (scriptTag && scriptTag.textContent) {
-            try {
-                appDiv.dataset.page = scriptTag.textContent;
-            } catch (e) {
-                console.error('Failed to move data-page from script to div', e);
-            }
-        }
-    }
 });

@@ -5,25 +5,21 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
-class MessageRule extends Model
+class HubspotOwner extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'client_id',
-        'automation_flow_id',
-        'treble_template_id',
         'name',
-        'priority',
-        'trigger_property',
-        'trigger_value',
-        'conditions',
+        'external_owner_id',
+        'email',
         'active',
     ];
 
     protected $casts = [
-        'conditions' => 'array',
         'active' => 'boolean',
     ];
 
@@ -32,13 +28,13 @@ class MessageRule extends Model
         return $this->belongsTo(Client::class);
     }
 
-    public function trebleTemplate(): BelongsTo
+    public function automationFlows(): BelongsToMany
     {
-        return $this->belongsTo(TrebleTemplate::class);
-    }
-
-    public function automationFlow(): BelongsTo
-    {
-        return $this->belongsTo(AutomationFlow::class);
+        return $this->belongsToMany(
+            AutomationFlow::class,
+            'hubspot_owner_owner_assignment_rule',
+            'hubspot_owner_id',
+            'owner_assignment_rule_id'
+        );
     }
 }

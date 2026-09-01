@@ -36,6 +36,16 @@ class Client extends Model
         return $this->hasMany(MessageRule::class);
     }
 
+    public function hubspotOwners(): HasMany
+    {
+        return $this->hasMany(HubspotOwner::class);
+    }
+
+    public function automationFlows(): HasMany
+    {
+        return $this->hasMany(AutomationFlow::class);
+    }
+
     public function records(): HasMany
     {
         return $this->hasMany(Record::class);

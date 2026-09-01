@@ -77,7 +77,7 @@ class LiteAdminPagesTest extends TestCase
         $response->assertOk();
     }
 
-    public function test_client_rules_page_is_accessible_with_permission(): void
+    public function test_client_flows_page_is_accessible_with_permission(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);
         $actor = User::factory()->create();
@@ -89,9 +89,32 @@ class LiteAdminPagesTest extends TestCase
             'active' => true,
         ]);
 
-        $response = $this->actingAs($actor)->get("/admin/clients/{$client->id}/rules");
+        $response = $this->actingAs($actor)->get("/admin/clients/{$client->id}/flows");
 
         $response->assertOk();
+    }
+
+    public function test_client_owners_page_is_accessible_with_permission(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'integrations.manage');
+        $client = Client::query()->create(['name' => 'Acme', 'slug' => 'acme', 'active' => true]);
+
+        $this->actingAs($actor)->get("/admin/clients/{$client->id}/owners")->assertOk();
+    }
+
+    public function test_legacy_rule_pages_redirect_to_flows(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'integrations.manage');
+        $client = Client::query()->create(['name' => 'Acme', 'slug' => 'acme', 'active' => true]);
+
+        $this->actingAs($actor)->get("/admin/clients/{$client->id}/rules")
+            ->assertRedirect("/admin/clients/{$client->id}/flows");
+        $this->actingAs($actor)->get("/admin/clients/{$client->id}/owner-rules")
+            ->assertRedirect("/admin/clients/{$client->id}/flows");
     }
 
     public function test_records_page_is_accessible_with_permission(): void
@@ -130,8 +153,8 @@ class LiteAdminPagesTest extends TestCase
     private function grantPermission(User $user, string $permissionSlug): void
     {
         $role = Role::query()->create([
-            'name' => 'Lite Role ' . $permissionSlug,
-            'slug' => 'lite-role-' . str_replace('.', '-', $permissionSlug) . '-' . $user->id,
+            'name' => 'Lite Role '.$permissionSlug,
+            'slug' => 'lite-role-'.str_replace('.', '-', $permissionSlug).'-'.$user->id,
             'description' => 'Temporary Lite role for tests',
         ]);
 

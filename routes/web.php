@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\Admin\AutomationFlowManagementController;
 use App\Http\Controllers\Admin\ClientManagementController;
 use App\Http\Controllers\Admin\ClientRecordController;
+use App\Http\Controllers\Admin\HubspotOwnerManagementController;
 use App\Http\Controllers\Admin\LiteAdminController;
 use App\Http\Controllers\Admin\MessageRuleManagementController;
 use App\Http\Controllers\Admin\PlatformConnectionManagementController;
@@ -69,12 +71,12 @@ Route::middleware('auth')->group(function () {
         Route::put('/clients/{client}/connections/{connection}', [PlatformConnectionManagementController::class, 'update'])
             ->name('clients.connections.update')
             ->middleware('permission:integrations.manage');
-Route::post('/clients/{client}/connections/{connection}/rotate-webhook-secret', [PlatformConnectionManagementController::class, 'rotateWebhookSecret'])
-    ->name('clients.connections.rotate-webhook-secret')
-    ->middleware('permission:integrations.manage');
-Route::post('/clients/{client}/connections/{connection}/revoke-webhook-secret', [PlatformConnectionManagementController::class, 'revokeWebhookSecret'])
-    ->name('clients.connections.revoke-webhook-secret')
-    ->middleware('permission:integrations.manage');
+        Route::post('/clients/{client}/connections/{connection}/rotate-webhook-secret', [PlatformConnectionManagementController::class, 'rotateWebhookSecret'])
+            ->name('clients.connections.rotate-webhook-secret')
+            ->middleware('permission:integrations.manage');
+        Route::post('/clients/{client}/connections/{connection}/revoke-webhook-secret', [PlatformConnectionManagementController::class, 'revokeWebhookSecret'])
+            ->name('clients.connections.revoke-webhook-secret')
+            ->middleware('permission:integrations.manage');
         Route::delete('/clients/{client}/connections/{connection}', [PlatformConnectionManagementController::class, 'destroy'])
             ->name('clients.connections.destroy')
             ->middleware('permission:integrations.manage');
@@ -98,23 +100,65 @@ Route::post('/clients/{client}/connections/{connection}/revoke-webhook-secret', 
             ->name('clients.templates.destroy')
             ->middleware('permission:integrations.manage');
 
-        Route::get('/clients/{client}/rules', [LiteAdminController::class, 'clientRules'])
+        Route::get('/clients/{client}/owners', [LiteAdminController::class, 'clientOwners'])
+            ->name('clients.owners')
+            ->middleware('permission:integrations.manage');
+        Route::get('/clients/{client}/owners/create', [LiteAdminController::class, 'clientOwnersCreate'])
+            ->name('clients.owners.create')
+            ->middleware('permission:integrations.manage');
+        Route::get('/clients/{client}/owners/{owner}/edit', [LiteAdminController::class, 'clientOwnersEdit'])
+            ->name('clients.owners.edit')
+            ->middleware('permission:integrations.manage');
+        Route::post('/clients/{client}/owners', [HubspotOwnerManagementController::class, 'store'])
+            ->name('clients.owners.store')
+            ->middleware('permission:integrations.manage');
+        Route::put('/clients/{client}/owners/{owner}', [HubspotOwnerManagementController::class, 'update'])
+            ->name('clients.owners.update')
+            ->middleware('permission:integrations.manage');
+        Route::delete('/clients/{client}/owners/{owner}', [HubspotOwnerManagementController::class, 'destroy'])
+            ->name('clients.owners.destroy')
+            ->middleware('permission:integrations.manage');
+
+        Route::get('/clients/{client}/flows', [LiteAdminController::class, 'clientFlows'])
+            ->name('clients.flows')
+            ->middleware('permission:integrations.manage');
+        Route::get('/clients/{client}/flows/create', [LiteAdminController::class, 'clientFlowsCreate'])
+            ->name('clients.flows.create')
+            ->middleware('permission:integrations.manage');
+        Route::get('/clients/{client}/flows/{flow}/edit', [LiteAdminController::class, 'clientFlowsEdit'])
+            ->name('clients.flows.edit')
+            ->middleware('permission:integrations.manage');
+        Route::post('/clients/{client}/flows', [AutomationFlowManagementController::class, 'store'])
+            ->name('clients.flows.store')
+            ->middleware('permission:integrations.manage');
+        Route::put('/clients/{client}/flows/{flow}', [AutomationFlowManagementController::class, 'update'])
+            ->name('clients.flows.update')
+            ->middleware('permission:integrations.manage');
+        Route::delete('/clients/{client}/flows/{flow}', [AutomationFlowManagementController::class, 'destroy'])
+            ->name('clients.flows.destroy')
+            ->middleware('permission:integrations.manage');
+
+        Route::get('/clients/{client}/flows/{flow}/rules/create', [LiteAdminController::class, 'clientFlowRulesCreate'])
+            ->name('clients.flows.rules.create')
+            ->middleware('permission:integrations.manage');
+        Route::get('/clients/{client}/flows/{flow}/rules/{rule}/edit', [LiteAdminController::class, 'clientFlowRulesEdit'])
+            ->name('clients.flows.rules.edit')
+            ->middleware('permission:integrations.manage');
+        Route::post('/clients/{client}/flows/{flow}/rules', [MessageRuleManagementController::class, 'store'])
+            ->name('clients.flows.rules.store')
+            ->middleware('permission:integrations.manage');
+        Route::put('/clients/{client}/flows/{flow}/rules/{rule}', [MessageRuleManagementController::class, 'update'])
+            ->name('clients.flows.rules.update')
+            ->middleware('permission:integrations.manage');
+        Route::delete('/clients/{client}/flows/{flow}/rules/{rule}', [MessageRuleManagementController::class, 'destroy'])
+            ->name('clients.flows.rules.destroy')
+            ->middleware('permission:integrations.manage');
+
+        Route::redirect('/clients/{client}/rules', '/admin/clients/{client}/flows')
             ->name('clients.rules')
             ->middleware('permission:integrations.manage');
-        Route::get('/clients/{client}/rules/create', [LiteAdminController::class, 'clientRulesCreate'])
-            ->name('clients.rules.create')
-            ->middleware('permission:integrations.manage');
-        Route::get('/clients/{client}/rules/{rule}/edit', [LiteAdminController::class, 'clientRulesEdit'])
-            ->name('clients.rules.edit')
-            ->middleware('permission:integrations.manage');
-        Route::post('/clients/{client}/rules', [MessageRuleManagementController::class, 'store'])
-            ->name('clients.rules.store')
-            ->middleware('permission:integrations.manage');
-        Route::put('/clients/{client}/rules/{rule}', [MessageRuleManagementController::class, 'update'])
-            ->name('clients.rules.update')
-            ->middleware('permission:integrations.manage');
-        Route::delete('/clients/{client}/rules/{rule}', [MessageRuleManagementController::class, 'destroy'])
-            ->name('clients.rules.destroy')
+        Route::redirect('/clients/{client}/owner-rules', '/admin/clients/{client}/flows')
+            ->name('clients.owner-rules')
             ->middleware('permission:integrations.manage');
 
         Route::get('/clients/{client}/records', [ClientRecordController::class, 'index'])
