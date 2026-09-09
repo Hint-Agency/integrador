@@ -75,7 +75,7 @@ class AutomationFlowManagementController extends Controller
             'conditions.groups.*.rules.*.value' => ['nullable'],
             'owner_assignment_enabled' => ['required', 'boolean'],
             'owner_property' => ['exclude_if:owner_assignment_enabled,false', 'required', 'string', 'max:255'],
-            'owner_selection_strategy' => ['exclude_if:owner_assignment_enabled,false', 'required', Rule::in(['random'])],
+            'owner_selection_strategy' => ['exclude_if:owner_assignment_enabled,false', 'required', Rule::in(['random', 'sequential'])],
             'existing_owner_behavior' => ['exclude_if:owner_assignment_enabled,false', 'required', Rule::in(['stop', 'continue'])],
             'owner_ids' => ['exclude_if:owner_assignment_enabled,false', 'required', 'array', 'min:1'],
             'owner_ids.*' => [

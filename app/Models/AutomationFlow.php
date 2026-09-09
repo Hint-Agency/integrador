@@ -24,6 +24,8 @@ class AutomationFlow extends Model
         'owner_assignment_enabled',
         'owner_property',
         'owner_selection_strategy',
+        'last_assigned_owner_id',
+        'owner_rotation_state',
         'existing_owner_behavior',
         'continue_to_treble',
         'active',
@@ -31,6 +33,7 @@ class AutomationFlow extends Model
 
     protected $casts = [
         'conditions' => 'array',
+        'owner_rotation_state' => 'array',
         'owner_assignment_enabled' => 'boolean',
         'continue_to_treble' => 'boolean',
         'active' => 'boolean',
@@ -49,6 +52,11 @@ class AutomationFlow extends Model
             'owner_assignment_rule_id',
             'hubspot_owner_id'
         );
+    }
+
+    public function lastAssignedOwner(): BelongsTo
+    {
+        return $this->belongsTo(HubspotOwner::class, 'last_assigned_owner_id');
     }
 
     public function messageRules(): HasMany

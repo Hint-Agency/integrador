@@ -741,7 +741,7 @@ class ClientWebhookProcessingTest extends TestCase
         $this->assertTrue($record->details['treble_response']['success']);
     }
 
-    public function test_flow_can_skip_owner_assignment_and_dispatch_treble_without_owners(): void
+    public function test_flow_can_skip_owner_assignment_validate_existing_owner_and_dispatch_treble(): void
     {
         [$client, $hubspot] = $this->seedClientConnections();
 
@@ -783,7 +783,7 @@ class ClientWebhookProcessingTest extends TestCase
                         'firstname' => 'Carlos',
                         'phone' => '+529991412826',
                         'plantilla_de_whatsapp' => 'Lista',
-                        'hubspot_owner_id' => null,
+                        'hubspot_owner_id' => 'owner-existing',
                     ],
                 ], 200);
             }
@@ -809,7 +809,72 @@ class ClientWebhookProcessingTest extends TestCase
         $this->assertSame('success', $record->status);
         $this->assertSame('owner_assignment_disabled', $record->details['owner_assignment']['reason']);
         $this->assertTrue($record->details['owner_assignment']['skipped']);
+        $this->assertSame('owner-existing', $record->details['owner_assignment']['selected_owner_id']);
         $this->assertTrue($record->details['treble_response']['success']);
+    }
+
+    public function test_flow_skipping_assignment_stops_before_treble_when_contact_has_no_owner(): void
+    {
+        [$client, $hubspot] = $this->seedClientConnections();
+
+        $flow = AutomationFlow::query()->create([
+            'client_id' => $client->id,
+            'name' => 'Treble requires existing owner',
+            'priority' => 100,
+            'trigger_property' => 'plantilla_de_whatsapp',
+            'trigger_value' => 'Lista',
+            'conditions' => [],
+            'owner_assignment_enabled' => false,
+            'continue_to_treble' => true,
+            'active' => true,
+        ]);
+        $template = TrebleTemplate::query()->create([
+            'client_id' => $client->id,
+            'name' => 'List message',
+            'external_template_id' => 'tpl-list',
+            'request_template' => [],
+            'active' => true,
+        ]);
+        MessageRule::query()->create([
+            'client_id' => $client->id,
+            'automation_flow_id' => $flow->id,
+            'treble_template_id' => $template->id,
+            'name' => 'List rule',
+            'priority' => 100,
+            'trigger_property' => $flow->trigger_property,
+            'trigger_value' => $flow->trigger_value,
+            'conditions' => [],
+            'active' => true,
+        ]);
+
+        Http::fake([
+            'https://hubspot.example/crm/v3/objects/contacts/*' => Http::response([
+                'id' => '123',
+                'properties' => [
+                    'plantilla_de_whatsapp' => 'Lista',
+                    'hubspot_owner_id' => null,
+                ],
+            ], 200),
+        ]);
+
+        dispatch_sync(new ProcessContactPropertyChangeJob(
+            $client,
+            $hubspot,
+            [
+                'subscriptionType' => 'contact.propertyChange',
+                'objectId' => '123',
+                'propertyName' => 'plantilla_de_whatsapp',
+                'propertyValue' => 'Lista',
+            ]
+        ));
+
+        Http::assertSentCount(1);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'treble.example'));
+
+        $record = Record::query()->latest('id')->firstOrFail();
+        $this->assertSame('warning', $record->status);
+        $this->assertSame('missing_required_existing_owner', $record->details['reason']);
+        $this->assertNull($record->details['treble_response']);
     }
 
     private function seedClientConnections(): array

@@ -151,6 +151,34 @@ class OwnerAssignmentManagementTest extends TestCase
         $this->assertDatabaseCount('owner_assignment_rules', 0);
     }
 
+    public function test_sequential_owner_selection_strategy_can_be_saved(): void
+    {
+        [$actor, $client] = $this->actorAndClient();
+        $owner = $client->hubspotOwners()->create([
+            'name' => 'Ana Lopez',
+            'external_owner_id' => 'owner-123',
+            'active' => true,
+        ]);
+
+        $response = $this->actingAs($actor)->post("/admin/clients/{$client->id}/flows", [
+            'name' => 'Secuencial Cancun',
+            'priority' => 100,
+            'trigger_property' => 'campus_de_interes',
+            'trigger_value' => 'Cancun',
+            'conditions' => [],
+            'owner_assignment_enabled' => true,
+            'owner_property' => 'hubspot_owner_id',
+            'owner_selection_strategy' => 'sequential',
+            'existing_owner_behavior' => 'stop',
+            'owner_ids' => [$owner->id],
+            'continue_to_treble' => false,
+            'active' => true,
+        ]);
+
+        $response->assertSessionHasNoErrors();
+        $this->assertSame('sequential', $client->automationFlows()->firstOrFail()->owner_selection_strategy);
+    }
+
     public function test_flow_can_disable_owner_assignment_without_configuring_owners(): void
     {
         [$actor, $client] = $this->actorAndClient();

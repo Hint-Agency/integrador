@@ -1,5 +1,6 @@
 <script setup>
 import ClientTabs from '@/Components/ClientTabs.vue';
+import FormActionButton from '@/Components/FormActionButton.vue';
 import AdminLayout from '@/Layouts/AdminLayout.vue';
 import { Link, router, useForm } from '@inertiajs/vue3';
 import { computed } from 'vue';
@@ -94,7 +95,7 @@ const submit = () => {
         conditions: normalizeConditions(),
         owner_assignment_enabled: !!form.owner_assignment_enabled,
         owner_property: form.owner_assignment_enabled ? (form.owner_property.trim() || 'hubspot_owner_id') : null,
-        owner_selection_strategy: form.owner_assignment_enabled ? 'random' : null,
+        owner_selection_strategy: form.owner_assignment_enabled ? form.owner_selection_strategy : null,
         existing_owner_behavior: form.owner_assignment_enabled ? form.existing_owner_behavior : null,
         owner_ids: form.owner_assignment_enabled ? form.owner_ids.map(Number) : [],
         continue_to_treble: !!form.continue_to_treble,
@@ -141,6 +142,35 @@ const destroyRule = (rule) => {
                     <label><span>Valor que inicia el flujo</span><input v-model="form.trigger_value" type="text" placeholder="Cancún"></label>
                     <label><span>Prioridad</span><input v-model="form.priority" type="number" min="0"></label>
                 </div>
+
+                <div class="condition-heading">
+                    <div><strong>Condiciones del flujo</strong><p>Agrega filtros como campus, lista o fuente original. Se evaluarán antes de ejecutar cualquier paso activo.</p></div>
+                    <FormActionButton icon="add" label="Agregar grupo" @click="addGroup" />
+                </div>
+
+                <label class="compact-field"><span>Relación entre grupos</span><select v-model="form.conditions.match"><option value="all">Todos (AND)</option><option value="any">Cualquiera (OR)</option></select></label>
+
+                <div class="group-stack">
+                    <div v-for="(group, groupIndex) in form.conditions.groups" :key="`group-${groupIndex}`" class="condition-group">
+                        <div class="group-head">
+                            <strong>Grupo {{ groupIndex + 1 }}</strong>
+                            <div class="group-actions"><select v-model="group.match"><option value="all">Todas (AND)</option><option value="any">Cualquiera (OR)</option></select><FormActionButton icon="delete" label="Quitar grupo" variant="danger" @click="removeGroup(groupIndex)" /></div>
+                        </div>
+                        <div class="condition-stack">
+                            <div v-for="(condition, conditionIndex) in group.rules" :key="`condition-${groupIndex}-${conditionIndex}`" class="condition-row">
+                                <label>
+                                    <span>Propiedad</span>
+                                    <input v-model="condition.property" type="text" placeholder="hs_analytics_source">
+                                    <small v-if="form.errors[`conditions.groups.${groupIndex}.rules.${conditionIndex}.property`]" class="field-error">{{ form.errors[`conditions.groups.${groupIndex}.rules.${conditionIndex}.property`] }}</small>
+                                </label>
+                                <label><span>Operador</span><select v-model="condition.operator"><option v-for="operator in operators" :key="operator.value" :value="operator.value">{{ operator.label }}</option></select></label>
+                                <label><span>Valor</span><input v-model="condition.value" type="text" :disabled="['is_empty', 'is_not_empty'].includes(condition.operator)" :placeholder="['in', 'not_in'].includes(condition.operator) ? 'X, Y, Z' : 'Valor'"></label>
+                                <FormActionButton icon="delete" label="Quitar condición" variant="danger" @click="removeCondition(groupIndex, conditionIndex)" />
+                            </div>
+                        </div>
+                        <FormActionButton class="add-condition" icon="add" label="Agregar condición" @click="addCondition(groupIndex)" />
+                    </div>
+                </div>
             </section>
 
             <div class="connector success">Después de validar el disparador</div>
@@ -159,7 +189,11 @@ const destroyRule = (rule) => {
                     </div>
 
                     <div class="section-head">
-                        <div><strong>Propietarios elegibles</strong><p>Se elegirá uno al azar entre los propietarios activos seleccionados.</p></div>
+                        <div>
+                            <strong>Propietarios elegibles</strong>
+                            <p v-if="form.owner_selection_strategy === 'sequential'">Se asignarán por turno según el orden en que fueron registrados.</p>
+                            <p v-else>Todos participarán una vez por ciclo, en orden aleatorio y sin repetición inmediata.</p>
+                        </div>
                         <Link class="ghost-button" :href="`/admin/clients/${client.id}/owners/create`">Dar de alta propietario</Link>
                     </div>
 
@@ -174,7 +208,13 @@ const destroyRule = (rule) => {
 
                     <div class="grid">
                         <label><span>Propiedad owner en HubSpot</span><input v-model="form.owner_property" type="text" required></label>
-                        <label><span>Estrategia</span><select v-model="form.owner_selection_strategy" disabled><option value="random">Aleatoria</option></select></label>
+                        <label>
+                            <span>Estrategia</span>
+                            <select v-model="form.owner_selection_strategy">
+                                <option value="random">Aleatoria por ciclos equitativos</option>
+                                <option value="sequential">Secuencial</option>
+                            </select>
+                        </label>
                         <label>
                             <span>Si el contacto ya tiene propietario</span>
                             <select v-model="form.existing_owner_behavior">
@@ -185,41 +225,15 @@ const destroyRule = (rule) => {
                     </div>
                 </template>
 
-                <div v-else class="skip-policy"><strong>Asignación omitida</strong><p>El flujo no consultará ni modificará el propietario. Si las condiciones coinciden, continuará directamente al paso Treble.</p></div>
+                <div v-else class="skip-policy"><strong>Validar propietario existente</strong><p>El flujo no modificará el propietario. Solo continuará a Treble cuando el contacto ya tenga valor en <code>{{ form.owner_property || 'hubspot_owner_id' }}</code>.</p></div>
 
-                <div class="condition-heading">
-                    <div><strong>Condiciones del flujo</strong><p>Agrega filtros como campus, lista o fuente original. Se evaluarán antes de ejecutar cualquier paso activo.</p></div>
-                    <button type="button" class="ghost-button" @click="addGroup">Agregar grupo</button>
+                <div v-if="form.owner_assignment_enabled && form.existing_owner_behavior === 'stop'" class="failure-policy">
+                    <strong>Si el contacto ya tiene propietario</strong>
+                    <p>Conservar el propietario actual y detener el flujo. El paso 2 no se ejecuta.</p>
                 </div>
-
-                <label class="compact-field"><span>Relación entre grupos</span><select v-model="form.conditions.match"><option value="all">Todos (AND)</option><option value="any">Cualquiera (OR)</option></select></label>
-
-                <div class="group-stack">
-                    <div v-for="(group, groupIndex) in form.conditions.groups" :key="`group-${groupIndex}`" class="condition-group">
-                        <div class="group-head">
-                            <strong>Grupo {{ groupIndex + 1 }}</strong>
-                            <div class="group-actions"><select v-model="group.match"><option value="all">Todas (AND)</option><option value="any">Cualquiera (OR)</option></select><button type="button" class="ghost-button danger" @click="removeGroup(groupIndex)">Quitar grupo</button></div>
-                        </div>
-                        <div class="condition-stack">
-                            <div v-for="(condition, conditionIndex) in group.rules" :key="`condition-${groupIndex}-${conditionIndex}`" class="condition-row">
-                                <label>
-                                    <span>Propiedad</span>
-                                    <input v-model="condition.property" type="text" placeholder="hs_analytics_source">
-                                    <small v-if="form.errors[`conditions.groups.${groupIndex}.rules.${conditionIndex}.property`]" class="field-error">{{ form.errors[`conditions.groups.${groupIndex}.rules.${conditionIndex}.property`] }}</small>
-                                </label>
-                                <label><span>Operador</span><select v-model="condition.operator"><option v-for="operator in operators" :key="operator.value" :value="operator.value">{{ operator.label }}</option></select></label>
-                                <label><span>Valor</span><input v-model="condition.value" type="text" :disabled="['is_empty', 'is_not_empty'].includes(condition.operator)" :placeholder="['in', 'not_in'].includes(condition.operator) ? 'X, Y, Z' : 'Valor'"></label>
-                                <button type="button" class="ghost-button danger" @click="removeCondition(groupIndex, conditionIndex)">Quitar</button>
-                            </div>
-                        </div>
-                        <button type="button" class="ghost-button add-condition" @click="addCondition(groupIndex)">Agregar condición</button>
-                    </div>
-                </div>
-
-                <div v-if="form.owner_assignment_enabled" class="failure-policy"><strong>Si falla la asignación</strong><p>Detener el flujo, registrar el error e intentar crear una nota en HubSpot. El paso 2 no se ejecuta.</p></div>
             </section>
 
-            <div class="connector success">{{ form.owner_assignment_enabled ? 'Solo cuando HubSpot confirma la asignación' : 'Continúa sin modificar el propietario' }}</div>
+            <div class="connector success">{{ form.owner_assignment_enabled ? 'Solo cuando HubSpot confirma la asignación' : 'Solo cuando ya existe un propietario' }}</div>
 
             <section :class="['section', { muted: !form.continue_to_treble }]">
                 <header class="section-head">

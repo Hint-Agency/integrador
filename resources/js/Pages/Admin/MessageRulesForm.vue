@@ -1,5 +1,6 @@
 <script setup>
 import ClientTabs from '@/Components/ClientTabs.vue';
+import FormActionButton from '@/Components/FormActionButton.vue';
 import AdminLayout from '@/Layouts/AdminLayout.vue';
 import { Link, useForm } from '@inertiajs/vue3';
 import { computed } from 'vue';
@@ -184,7 +185,7 @@ const submit = () => {
                         <h2>Condiciones adicionales</h2>
                         <p>Estas condiciones se evalúan con el contacto ya asignado. La primera regla coincidente por prioridad enviará su plantilla.</p>
                     </div>
-                    <button type="button" class="ghost-button" @click="addGroup">Agregar grupo</button>
+                    <FormActionButton icon="add" label="Agregar grupo" @click="addGroup" />
                 </header>
 
                 <div class="section-topbar">
@@ -212,7 +213,7 @@ const submit = () => {
                                         <option value="any">Cualquiera (OR)</option>
                                     </select>
                                 </label>
-                                <button type="button" class="ghost-button danger" @click="removeGroup(groupIndex)">Quitar grupo</button>
+                                <FormActionButton icon="delete" label="Quitar grupo" variant="danger" @click="removeGroup(groupIndex)" />
                             </div>
                         </header>
 
@@ -237,12 +238,12 @@ const submit = () => {
                                         :placeholder="rule.operator === 'in' || rule.operator === 'not_in' ? 'Maternal, Prematernal' : 'La Paz'"
                                     >
                                 </label>
-                                <button type="button" class="ghost-button danger" @click="removeRule(groupIndex, ruleIndex)">Quitar</button>
+                                <FormActionButton icon="delete" label="Quitar condición" variant="danger" @click="removeRule(groupIndex, ruleIndex)" />
                             </div>
                         </div>
 
                         <div class="group-footer">
-                            <button type="button" class="ghost-button" @click="addRule(groupIndex)">Agregar condición</button>
+                            <FormActionButton icon="add" label="Agregar condición" @click="addRule(groupIndex)" />
                         </div>
                     </article>
                 </div>

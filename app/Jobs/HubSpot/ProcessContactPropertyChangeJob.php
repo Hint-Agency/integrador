@@ -183,6 +183,16 @@ class ProcessContactPropertyChangeJob implements ShouldQueue
                         'error' => null,
                     ],
                 ];
+
+                if ($currentOwnerId === '') {
+                    $eventLoggingService->logEventWarning(
+                        $record,
+                        'Owner assignment was skipped, but the contact has no existing owner.',
+                        array_merge($details, ['reason' => 'missing_required_existing_owner'])
+                    );
+
+                    return;
+                }
             } else {
                 $existingOwnerBehavior = $flow->existing_owner_behavior === 'continue' ? 'continue' : 'stop';
                 $details['existing_owner_behavior'] = $existingOwnerBehavior;

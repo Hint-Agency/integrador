@@ -50,15 +50,15 @@ const destroyFlow = (flow) => {
                         <div>
                             <strong>{{ flow.owner_assignment_enabled ? 'Asignar propietario' : 'Asignación de propietario omitida' }}</strong>
                             <template v-if="flow.owner_assignment_enabled">
-                                <p>{{ flow.owners.length }} asesor(es) · selección aleatoria cuando {{ flow.owner_property }} está vacío</p>
+                                <p>{{ flow.owners.length }} asesor(es) · selección {{ flow.owner_selection_strategy === 'sequential' ? 'secuencial' : 'aleatoria por ciclos equitativos' }} cuando {{ flow.owner_property }} está vacío</p>
                                 <p>Si ya tiene propietario: {{ flow.existing_owner_behavior === 'continue' ? 'conservar y continuar' : 'conservar y detener' }}</p>
                             </template>
-                            <p v-else>El flujo continúa sin consultar ni modificar el propietario.</p>
+                            <p v-else>Valida que el contacto ya tenga propietario y continúa sin modificarlo.</p>
                         </div>
                         <span class="required">{{ flow.owner_assignment_enabled ? 'Habilitado' : 'Omitido' }}</span>
                     </div>
 
-                    <div class="connector"><span>{{ flow.owner_assignment_enabled ? 'Si termina correctamente' : 'Continúa directamente' }}</span></div>
+                    <div class="connector"><span>{{ flow.owner_assignment_enabled ? 'Si termina correctamente' : 'Si ya tiene propietario' }}</span></div>
 
                     <div :class="['step', { disabled: !flow.continue_to_treble }]">
                         <span class="step-number">2</span>

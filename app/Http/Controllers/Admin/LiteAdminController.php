@@ -272,6 +272,7 @@ class LiteAdminController extends Controller
                             ->sum(fn (array $group): int => count($group['rules'] ?? [])),
                         'owner_assignment_enabled' => (bool) $flow->owner_assignment_enabled,
                         'owner_property' => $flow->owner_property,
+                        'owner_selection_strategy' => $flow->owner_selection_strategy ?: 'random',
                         'existing_owner_behavior' => $flow->existing_owner_behavior ?: 'stop',
                         'owners' => $flow->owners->map->only(['id', 'name', 'external_owner_id'])->values(),
                         'continue_to_treble' => (bool) $flow->continue_to_treble,
