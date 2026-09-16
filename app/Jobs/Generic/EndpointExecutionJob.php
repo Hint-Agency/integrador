@@ -2,6 +2,7 @@
 
 namespace App\Jobs\Generic;
 
+use App\Jobs\ProcessNextEventJob;
 use App\Models\Event;
 use App\Models\EventIdempotencyKey;
 use App\Models\Record;
@@ -11,14 +12,13 @@ use App\Services\Generic\GenericHttpAdapter;
 use App\Services\Generic\GenericPlatformService;
 use App\Services\Hubspot\HubspotApiServiceRefactored;
 use App\Services\RateLimitService;
-use App\Jobs\ProcessNextEventJob;
+use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Bus\Queueable;
-use Illuminate\Queue\SerializesModels;
 use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class EndpointExecutionJob implements ShouldQueue
@@ -26,7 +26,9 @@ class EndpointExecutionJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
+
     public int $backoff = 60;
+
     public int $timeout = 300;
 
     public function __construct(
@@ -83,6 +85,7 @@ class EndpointExecutionJob implements ShouldQueue
                 'attempt' => $response['attempt'],
             ]);
             $this->release((int) ceil($backoffMs / 1000));
+
             return;
         }
 
@@ -184,6 +187,9 @@ class EndpointExecutionJob implements ShouldQueue
             'hubspot_object_id',
             'hubspot_object_type',
             'hubspotObjectId',
+            'hubspotDealId',
+            'hubspotQuoteId',
+            'hubspotLineItemId',
             'hs_object_id',
             'objectId',
             'id',
@@ -209,6 +215,7 @@ class EndpointExecutionJob implements ShouldQueue
         foreach ($headers as $key => $value) {
             if (in_array(strtolower((string) $key), $sensitive, true)) {
                 $sanitized[$key] = '[redacted]';
+
                 continue;
             }
             $sanitized[$key] = $value;
@@ -265,8 +272,8 @@ class EndpointExecutionJob implements ShouldQueue
 
         $sensitive = config('generic-platforms.policy.sensitive_headers', []);
         foreach ($sensitive as $header) {
-            $pattern = '/' . preg_quote($header, '/') . '\\s*:\\s*[^\\n\\r]*/i';
-            $details = preg_replace($pattern, $header . ': [redacted]', $details);
+            $pattern = '/'.preg_quote($header, '/').'\\s*:\\s*[^\\n\\r]*/i';
+            $details = preg_replace($pattern, $header.': [redacted]', $details);
         }
 
         return $details;
@@ -374,12 +381,12 @@ class EndpointExecutionJob implements ShouldQueue
         return trim(implode("\n", array_filter([
             '[Integrador] Error de sincronizacion de contacto',
             'Operacion: envio a plataforma destino',
-            'Evento: ' . ($this->event->name ?: $this->event->event_type_id),
-            'Motivo: ' . trim((string) $message),
-            is_scalar($field) && trim((string) $field) !== '' ? 'Propiedad: ' . trim((string) $field) : null,
-            isset($response['status_code']) ? 'Codigo HTTP: ' . $response['status_code'] : null,
-            'Record: #' . $this->record->id,
-            'Fecha: ' . now()->toISOString(),
+            'Evento: '.($this->event->name ?: $this->event->event_type_id),
+            'Motivo: '.trim((string) $message),
+            is_scalar($field) && trim((string) $field) !== '' ? 'Propiedad: '.trim((string) $field) : null,
+            isset($response['status_code']) ? 'Codigo HTTP: '.$response['status_code'] : null,
+            'Record: #'.$this->record->id,
+            'Fecha: '.now()->toISOString(),
         ])));
     }
 
@@ -388,8 +395,7 @@ class EndpointExecutionJob implements ShouldQueue
         string $method,
         array $policy,
         EventLoggingService $eventLoggingService
-    ): array
-    {
+    ): array {
         if (! (bool) ($policy['enabled'] ?? false)) {
             return [
                 'skip' => false,
@@ -505,7 +511,13 @@ class EndpointExecutionJob implements ShouldQueue
             '{endpoint}' => $endpoint,
         ]);
 
-        return 'evt:' . $this->event->id . ':idem:' . Str::lower(sha1($raw));
+        $raw = preg_replace_callback('/\{payload\.([^}]+)\}/', function (array $matches): string {
+            $value = data_get($this->payload, $matches[1]);
+
+            return is_scalar($value) ? trim((string) $value) : '';
+        }, $raw) ?? $raw;
+
+        return 'evt:'.$this->event->id.':idem:'.Str::lower(sha1($raw));
     }
 
     private function extractRetryAfter(array $response): ?int

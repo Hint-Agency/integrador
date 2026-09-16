@@ -544,15 +544,22 @@ class EventFlowService
         }
 
         $visited[] = $event->id;
-        $event->loadMissing(['platform', 'to_event']);
+        $event->loadMissing(['platform', 'to_event', 'httpConfig']);
 
         $nodes[$event->id] = [
             'id' => $event->id,
             'name' => $event->name,
             'event_type_id' => $event->event_type_id,
+            'event_type_label' => $event->getEventTypeLabel(),
             'platform' => $event->platform?->name ?? $event->platform?->type,
             'platform_type' => $event->platform?->type,
             'type' => $event->type,
+            'subscription_type' => $event->subscription_type,
+            'method_name' => $event->getMethodName() ?? $event->method_name,
+            'schedule_expression' => $event->schedule_expression,
+            'endpoint' => $event->httpConfig
+                ? trim($event->httpConfig->method.' '.trim($event->httpConfig->path ?? '', '/'))
+                : $event->endpoint_api,
             'active' => (bool) $event->active,
             'to_event_id' => $event->to_event_id,
             'depth' => $depth,

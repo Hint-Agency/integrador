@@ -15,6 +15,7 @@ use App\Services\Generic\AuthStrategyResolver;
 use App\Services\Generic\GenericHttpAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
@@ -22,6 +23,67 @@ use Tests\TestCase;
 class AspelProductPollingTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_it_uses_event_lookback_minutes_when_product_cursor_does_not_exist(): void
+    {
+        Carbon::setTestNow('2026-09-15T12:00:00Z');
+
+        [$aspelPlatform, $scheduleEvent, $record] = $this->preparePollingContext();
+        $scheduleEvent->update([
+            'meta' => array_merge($scheduleEvent->meta ?? [], [
+                'initial_lookback_minutes' => 15,
+            ]),
+        ]);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')
+            ->once()
+            ->withArgs(function (
+                string $platform,
+                string $endpoint,
+                string $method,
+                array $headers,
+                array $query
+            ): bool {
+                return $platform === 'aspel'
+                    && $method === 'GET'
+                    && $query['sinceTs'] === '2026-09-15T11:45:00.000000Z'
+                    && $query['sinceClave'] === ''
+                    && $query['take'] === 200;
+            })
+            ->andReturn([
+                'success' => true,
+                'status_code' => 200,
+                'retryable' => false,
+                'request_id' => 'req_product_changes_empty',
+                'external_id' => null,
+                'latency_ms' => 5,
+                'attempt' => 1,
+                'endpoint' => 'https://api.example.com/api/products/changes',
+                'method' => 'GET',
+                'data' => [
+                    'items' => [],
+                    'nextSinceTs' => '2026-09-15T11:45:00.000000Z',
+                    'nextSinceClave' => '',
+                    'hasMore' => false,
+                ],
+                'error' => ['code' => null, 'message' => null, 'details' => null],
+            ]);
+
+        $service = new AspelService(
+            $aspelPlatform,
+            app(AuthStrategyResolver::class),
+            $scheduleEvent->fresh(),
+            $record,
+        );
+
+        $result = $service->getUpdatedProducts([], $adapter);
+
+        $this->assertTrue($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $this->assertSame('2026-09-15T11:45:00.000000Z', data_get($result, 'data.cursor.sinceTs'));
+
+        Carbon::setTestNow();
+    }
 
     public function test_it_processes_changed_products_and_persists_cursor_on_success(): void
     {
@@ -209,6 +271,110 @@ class AspelProductPollingTest extends TestCase
 
         $this->assertTrue($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $this->assertSame('A001', data_get(Config::query()->where('key', 'aspel.products.cursor.' . $scheduleEvent->id . '.since_clave')->first()?->value, 'value'));
+    }
+
+    public function test_it_continues_the_page_and_reports_failed_products_without_advancing_cursor(): void
+    {
+        config()->set('hubspot.access_token', 'token_123');
+        config()->set('hubspot.base_url', 'https://api.hubapi.test');
+
+        [$aspelPlatform, $scheduleEvent, $record] = $this->preparePollingContext();
+
+        Http::fake(function (Request $request) {
+            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/products/search') {
+                return Http::response([
+                    'results' => [[
+                        'id' => '903',
+                        'properties' => ['clave' => 'A002'],
+                    ]],
+                ], 200);
+            }
+
+            if ($request->method() === 'PATCH' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/products/903') {
+                return Http::response([
+                    'id' => '903',
+                    'properties' => $request->data()['properties'] ?? [],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_product_changes_1',
+            'external_id' => null,
+            'latency_ms' => 10,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/products/changes',
+            'method' => 'GET',
+            'data' => [
+                'items' => [
+                    ['clave' => 'A001', 'versionSinc' => '2026-05-21T10:15:30'],
+                    ['clave' => 'A002', 'versionSinc' => '2026-05-21T10:16:30'],
+                ],
+                'nextSinceTs' => '2026-05-21T10:16:30',
+                'nextSinceClave' => 'A002',
+                'hasMore' => false,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+        $adapter->shouldReceive('send')->times(3)->andReturn([
+            'success' => false,
+            'status_code' => 404,
+            'retryable' => false,
+            'request_id' => 'req_product_detail_missing',
+            'external_id' => 'A001',
+            'latency_ms' => 5,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/products/A001',
+            'method' => 'GET',
+            'data' => [],
+            'error' => ['code' => 'not_found', 'message' => 'Product not found', 'details' => null],
+        ])->ordered();
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_product_detail_2',
+            'external_id' => 'A002',
+            'latency_ms' => 8,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/products/A002',
+            'method' => 'GET',
+            'data' => [
+                'clave' => 'A002',
+                'descripcion' => 'Producto procesable',
+                'linea' => '001',
+                'claveSat' => '10101500',
+                'claveUnidad' => 'H87',
+                'clase' => 'P',
+                'unidadEntrada' => 'PZA',
+                'unidadSalida' => 'PZA',
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+
+        $service = new AspelService(
+            $aspelPlatform,
+            app(AuthStrategyResolver::class),
+            $scheduleEvent,
+            $record,
+        );
+
+        $result = $service->getUpdatedProducts([], $adapter);
+
+        $this->assertFalse($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $this->assertNull(Config::query()->where('key', 'aspel.products.cursor.' . $scheduleEvent->id . '.since_ts')->first());
+        $this->assertSame(2, data_get($result, 'data.metrics.items_seen'));
+        $this->assertSame(1, data_get($result, 'data.metrics.items_processed'));
+        $this->assertSame(1, data_get($result, 'data.metrics.items_failed'));
+        $this->assertSame('A001', data_get($result, 'data.failure_context.failed_items.0.clave'));
+        $this->assertSame(1, EventIdempotencyKey::query()->where('event_id', $scheduleEvent->id)->where('status', 'failed')->count());
+        $this->assertSame(1, EventIdempotencyKey::query()->where('event_id', $scheduleEvent->id)->where('status', 'success')->count());
     }
 
     private function preparePollingContext(): array

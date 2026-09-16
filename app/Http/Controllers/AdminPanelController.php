@@ -13,6 +13,7 @@ use App\Models\PropertyRelationship;
 use App\Models\Record;
 use App\Models\Role;
 use App\Models\User;
+use App\Services\EventFlowService;
 use App\Services\EventMappingContextResolver;
 use App\Services\EventProcessingService;
 use Illuminate\Http\Request;
@@ -24,7 +25,8 @@ class AdminPanelController extends Controller
 {
     public function __construct(
         protected EventProcessingService $eventProcessingService,
-        protected EventMappingContextResolver $eventMappingContextResolver
+        protected EventMappingContextResolver $eventMappingContextResolver,
+        protected EventFlowService $eventFlowService
     ) {}
 
     public function users()
@@ -62,11 +64,20 @@ class AdminPanelController extends Controller
 
     public function events()
     {
+        $totalEvents = Event::query()->count();
         $events = Event::query()
-            ->with(['platform:id,name,slug,type', 'to_event:id,name', 'httpConfig'])
+            ->whereDoesntHave('from_events')
+            ->with([
+                'platform:id,name,slug,type',
+                'to_event:id,name',
+                'httpConfig',
+                'eventTriggers' => static fn ($query) => $query->where('active', true)->orderBy('id'),
+            ])
             ->orderByDesc('id')
             ->paginate(20)
-            ->through(static function (Event $event): array {
+            ->through(function (Event $event): array {
+                $flow = $this->eventFlowService->getEventFlow($event);
+
                 return [
                     'id' => $event->id,
                     'name' => $event->name,
@@ -83,6 +94,12 @@ class AdminPanelController extends Controller
                     'payload_mapping' => $event->payload_mapping ?? [],
                     'meta' => $event->meta ?? [],
                     'active' => (bool) $event->active,
+                    'trigger_summary' => $this->eventTriggerSummary($event),
+                    'flow' => [
+                        'root_id' => $flow['root_id'],
+                        'chain' => $flow['chain'],
+                        'nodes' => $flow['nodes'],
+                    ],
                     'platform' => $event->platform ? [
                         'id' => $event->platform->id,
                         'name' => $event->platform->name,
@@ -121,6 +138,7 @@ class AdminPanelController extends Controller
 
         return inertia('Admin/Events', [
             'events' => $events,
+            'total_events' => $totalEvents,
             'platforms' => $platforms->map(fn (Platform $platform): array => [
                 'id' => $platform->id,
                 'name' => $platform->name,
@@ -131,6 +149,30 @@ class AdminPanelController extends Controller
             'event_type_groups' => EventType::groupedOptions(),
             'platform_method_options' => $this->buildPlatformMethodOptions($platforms),
         ]);
+    }
+
+    private function eventTriggerSummary(Event $event): string
+    {
+        if ($event->type === 'schedule') {
+            return $event->schedule_expression
+                ? 'Programado: '.$event->schedule_expression
+                : 'Evento programado';
+        }
+
+        $trigger = $event->eventTriggers->first();
+        if ($trigger) {
+            $value = is_array($trigger->value)
+                ? implode(', ', array_filter($trigger->value, 'is_scalar'))
+                : $trigger->value;
+
+            return trim(implode(' ', array_filter([
+                $trigger->field,
+                $trigger->operator,
+                is_scalar($value) ? (string) $value : null,
+            ])));
+        }
+
+        return $event->subscription_type ?: $event->event_type_id ?: 'Detonante manual';
     }
 
     public function eventsCreate()

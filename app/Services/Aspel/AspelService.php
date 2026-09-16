@@ -7,12 +7,14 @@ use App\Models\Event;
 use App\Models\EventIdempotencyKey;
 use App\Models\Platform;
 use App\Models\Record;
+use App\Services\EventFlowService;
 use App\Services\EventLoggingService;
 use App\Services\EventProcessingService;
 use App\Services\Generic\AuthStrategyResolver;
 use App\Services\Generic\GenericHttpAdapter;
 use App\Services\Generic\GenericPlatformService;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -57,6 +59,12 @@ class AspelService extends GenericPlatformService
         'version_sinc',
         'VERSION_SINC',
         'cursor_context',
+        'CVE_USUARIO',
+        'NOM_USUARIO',
+        'cveUsuario',
+        'nomUsuario',
+        'cve_usuario',
+        'nom_usuario',
     ];
 
     public function __construct(
@@ -87,6 +95,45 @@ class AspelService extends GenericPlatformService
 
     public function createContact(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
     {
+        $previousUpdate = Arr::get($payload, 'destination_response.data', []);
+        if (is_array($previousUpdate)
+            && (int) Arr::get($previousUpdate, 'updated_count', 0) > 0
+            && (int) Arr::get($previousUpdate, 'not_found_count', 0) === 0
+        ) {
+            $clave = $this->resolveScalarValue([
+                Arr::get($previousUpdate, 'clave'),
+                Arr::get($previousUpdate, 'lookup_response.item.clave'),
+                $this->resolveAspelClave($payload),
+            ]);
+
+            return [
+                'success' => true,
+                'status_code' => 200,
+                'retryable' => false,
+                'request_id' => '',
+                'external_id' => $clave,
+                'latency_ms' => 0,
+                'attempt' => 1,
+                'endpoint' => $this->resolveOperationEndpoint('create', $payload),
+                'method' => $this->resolveOperationHttpMethod('create'),
+                'message' => 'ASPEL contact creation skipped because the contact was already updated.',
+                'data' => [
+                    'success' => true,
+                    'operation' => 'skipped',
+                    'skip_reason' => 'contact_already_updated',
+                    'clave' => $clave,
+                    'updated_count' => (int) Arr::get($previousUpdate, 'updated_count'),
+                    'created_count' => 0,
+                    'message' => 'Contact already updated; create fallback was not executed.',
+                ],
+                'error' => [
+                    'code' => null,
+                    'message' => null,
+                    'details' => null,
+                ],
+            ];
+        }
+
         return $this->sendContactRequest('create', $payload, $httpAdapter);
     }
 
@@ -214,6 +261,71 @@ class AspelService extends GenericPlatformService
                 'stock_minimo' => $aggregated['stock_minimo'],
             ],
         ];
+    }
+
+    public function getProductPrices(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $sku = $this->resolveScalarValue([
+            Arr::get($payload, 'sku'),
+            Arr::get($payload, 'cveArt'),
+            Arr::get($payload, 'clave'),
+        ]);
+
+        if ($sku === null) {
+            return $this->localValidationError(
+                'ASPEL product price lookup requires sku.',
+                ['sku' => ['The sku field is required.']]
+            );
+        }
+
+        return $this->sendRequest(
+            $this->replaceFirstEndpointPlaceholder($this->resolveEndpoint($this->event), $sku),
+            'GET',
+            [],
+            $httpAdapter
+        );
+    }
+
+    public function getProductWarehouses(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $sku = $this->resolveScalarValue([
+            Arr::get($payload, 'sku'),
+            Arr::get($payload, 'cveArt'),
+            Arr::get($payload, 'clave'),
+        ]);
+
+        if ($sku === null) {
+            return $this->localValidationError(
+                'ASPEL warehouse lookup requires sku.',
+                ['sku' => ['The sku field is required.']]
+            );
+        }
+
+        return $this->sendRequest(
+            $this->replaceFirstEndpointPlaceholder($this->resolveEndpoint($this->event), $sku),
+            'GET',
+            [],
+            $httpAdapter
+        );
+    }
+
+    public function createQuote(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $validation = $this->normalizeQuotePayload($payload);
+        if (! $validation['valid']) {
+            return $this->localValidationError(
+                'ASPEL quote payload validation failed.',
+                $validation['errors'],
+                'invalid_aspel_quote_payload'
+            );
+        }
+
+        return $this->sendRequest(
+            $this->resolveEndpoint($this->event),
+            'POST',
+            $validation['payload'],
+            $httpAdapter
+        );
     }
 
     public function updateContactWithLookup(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
@@ -397,6 +509,7 @@ class AspelService extends GenericPlatformService
             'sinceTs' => $cursor['sinceTs'],
             'sinceClave' => $cursor['sinceClave'],
         ];
+        $failedItems = [];
 
         try {
             do {
@@ -426,90 +539,119 @@ class AspelService extends GenericPlatformService
 
                 foreach ($items as $item) {
                     if (! is_array($item)) {
-                        return $this->failPollingRun(
-                            'Invalid ASPEL changes payload: change item must be an array.',
-                            $pageResponse,
-                            $currentCursor,
-                            $metrics
-                        );
-                    }
-
-                    $metrics['items_seen']++;
-                    $changeIdempotency = $this->acquireChangeIdempotency($item, 'contacts');
-
-                    if (($changeIdempotency['skip'] ?? false) === true) {
-                        $metrics['items_skipped']++;
+                        $metrics['items_seen']++;
+                        $metrics['items_failed']++;
+                        $failedItems[] = [
+                            'stage' => 'change_item_validation',
+                            'message' => 'Invalid ASPEL changes payload: change item must be an array.',
+                            'item' => $item,
+                        ];
 
                         continue;
                     }
 
-                    $clave = $this->resolveAspelClave($item);
-                    $detailResponse = $this->getContactDetailByClaveWithRetry((string) $clave, $httpAdapter);
+                    $metrics['items_seen']++;
+                    $changeIdempotency = ['model' => null];
 
-                    if (! ($detailResponse['success'] ?? false)) {
-                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
-                            'reason' => 'detail_fetch_failed',
-                            'error' => $detailResponse['error'] ?? null,
-                            'status_code' => $detailResponse['status_code'] ?? null,
-                        ]);
+                    try {
+                        $changeIdempotency = $this->acquireChangeIdempotency($item, 'contacts');
 
-                        $metrics['items_failed']++;
+                        if (($changeIdempotency['skip'] ?? false) === true) {
+                            $metrics['items_skipped']++;
 
-                        return $this->failPollingRun(
-                            'Failed to fetch ASPEL contact detail.',
-                            [
-                                'changes_response' => $pageResponse,
-                                'detail_response' => $detailResponse,
-                                'failed_item' => $item,
+                            continue;
+                        }
+
+                        $clave = $this->resolveAspelClave($item);
+                        $detailResponse = $this->getContactDetailByClaveWithRetry((string) $clave, $httpAdapter);
+
+                        if (! ($detailResponse['success'] ?? false)) {
+                            $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                                'reason' => 'detail_fetch_failed',
+                                'error' => $detailResponse['error'] ?? null,
+                                'status_code' => $detailResponse['status_code'] ?? null,
+                            ]);
+
+                            $metrics['items_failed']++;
+                            $failedItems[] = [
+                                'stage' => 'detail_fetch',
+                                'clave' => $clave,
+                                'versionSinc' => $this->resolveAspelVersionSinc($item),
+                                'message' => 'Failed to fetch ASPEL contact detail.',
+                                'response' => $detailResponse,
                                 'detail_retry_attempts' => $detailResponse['retry_attempts'] ?? 0,
-                            ],
+                            ];
+
+                            continue;
+                        }
+
+                        $normalizedPayload = $this->buildHubspotSyncPayload(
+                            $item,
+                            Arr::get($detailResponse, 'data', []),
                             $currentCursor,
-                            $metrics
+                            [
+                                'sinceTs' => $nextSinceTs,
+                                'sinceClave' => $nextSinceClave,
+                            ],
+                            $hasMore
                         );
-                    }
 
-                    $normalizedPayload = $this->buildHubspotSyncPayload(
-                        $item,
-                        Arr::get($detailResponse, 'data', []),
-                        $currentCursor,
-                        [
-                            'sinceTs' => $nextSinceTs,
-                            'sinceClave' => $nextSinceClave,
-                        ],
-                        $hasMore
-                    );
+                        $syncResult = $this->processHubspotChangeSynchronously($normalizedPayload);
+                        if (! ($syncResult['success'] ?? false)) {
+                            $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                                'reason' => 'hubspot_sync_failed',
+                                'record_id' => $syncResult['record_id'] ?? null,
+                                'message' => $syncResult['message'] ?? null,
+                            ]);
 
-                    $syncResult = $this->processHubspotChangeSynchronously($normalizedPayload);
-                    if (! ($syncResult['success'] ?? false)) {
-                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
-                            'reason' => 'hubspot_sync_failed',
+                            $metrics['items_failed']++;
+                            $failedItems[] = [
+                                'stage' => 'hubspot_sync',
+                                'clave' => $normalizedPayload['clave'] ?? null,
+                                'versionSinc' => $normalizedPayload['versionSinc'] ?? null,
+                                'message' => $syncResult['message'] ?? 'Failed to sync ASPEL contact change to HubSpot.',
+                                'hubspot_sync' => $syncResult,
+                            ];
+
+                            continue;
+                        }
+
+                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'success', [
+                            'clave' => $normalizedPayload['clave'] ?? null,
+                            'version_sinc' => $normalizedPayload['versionSinc'] ?? null,
                             'record_id' => $syncResult['record_id'] ?? null,
-                            'message' => $syncResult['message'] ?? null,
+                            'hubspot_contact_id' => Arr::get($syncResult, 'data.contact_id'),
+                        ]);
+
+                        $metrics['items_processed']++;
+                    } catch (\Throwable $exception) {
+                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                            'reason' => 'unexpected_item_error',
+                            'exception' => get_class($exception),
+                            'message' => $exception->getMessage(),
                         ]);
 
                         $metrics['items_failed']++;
-
-                        return $this->failPollingRun(
-                            'Failed to sync ASPEL contact change to HubSpot.',
-                            [
-                                'changes_response' => $pageResponse,
-                                'detail_response' => $detailResponse,
-                                'failed_item' => $item,
-                                'hubspot_sync' => $syncResult,
-                            ],
-                            $currentCursor,
-                            $metrics
-                        );
+                        $failedItems[] = [
+                            'stage' => 'unexpected_item_error',
+                            'clave' => $this->resolveAspelClave($item),
+                            'versionSinc' => $this->resolveAspelVersionSinc($item),
+                            'message' => $exception->getMessage(),
+                            'exception' => get_class($exception),
+                        ];
                     }
+                }
 
-                    $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'success', [
-                        'clave' => $normalizedPayload['clave'] ?? null,
-                        'version_sinc' => $normalizedPayload['versionSinc'] ?? null,
-                        'record_id' => $syncResult['record_id'] ?? null,
-                        'hubspot_contact_id' => Arr::get($syncResult, 'data.contact_id'),
-                    ]);
-
-                    $metrics['items_processed']++;
+                if ($failedItems !== []) {
+                    return $this->failPollingRun(
+                        'ASPEL contact polling completed the current page with item failures.',
+                        [
+                            'failed_count' => count($failedItems),
+                            'failed_items' => $failedItems,
+                        ],
+                        $currentCursor,
+                        $metrics
+                    );
                 }
 
                 $metrics['pages_processed']++;
@@ -611,6 +753,7 @@ class AspelService extends GenericPlatformService
             'sinceTs' => $cursor['sinceTs'],
             'sinceClave' => $cursor['sinceClave'],
         ];
+        $failedItems = [];
 
         try {
             do {
@@ -642,93 +785,120 @@ class AspelService extends GenericPlatformService
 
                 foreach ($items as $item) {
                     if (! is_array($item)) {
-                        return $this->failPollingRunForScope(
-                            'products',
-                            'Invalid ASPEL product changes payload: change item must be an array.',
-                            $pageResponse,
-                            $currentCursor,
-                            $metrics
-                        );
-                    }
-
-                    $metrics['items_seen']++;
-                    $changeIdempotency = $this->acquireChangeIdempotency($item, 'products');
-
-                    if (($changeIdempotency['skip'] ?? false) === true) {
-                        $metrics['items_skipped']++;
+                        $metrics['items_seen']++;
+                        $metrics['items_failed']++;
+                        $failedItems[] = [
+                            'stage' => 'change_item_validation',
+                            'message' => 'Invalid ASPEL product changes payload: change item must be an array.',
+                            'item' => $item,
+                        ];
 
                         continue;
                     }
 
-                    $clave = $this->resolveAspelClave($item);
-                    $detailResponse = $this->getProductDetailByClaveWithRetry((string) $clave, $httpAdapter);
+                    $metrics['items_seen']++;
+                    $changeIdempotency = ['model' => null];
 
-                    if (! ($detailResponse['success'] ?? false)) {
-                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
-                            'reason' => 'detail_fetch_failed',
-                            'error' => $detailResponse['error'] ?? null,
-                            'status_code' => $detailResponse['status_code'] ?? null,
-                        ]);
+                    try {
+                        $changeIdempotency = $this->acquireChangeIdempotency($item, 'products');
 
-                        $metrics['items_failed']++;
+                        if (($changeIdempotency['skip'] ?? false) === true) {
+                            $metrics['items_skipped']++;
 
-                        return $this->failPollingRunForScope(
-                            'products',
-                            'Failed to fetch ASPEL product detail.',
-                            [
-                                'changes_response' => $pageResponse,
-                                'detail_response' => $detailResponse,
-                                'failed_item' => $item,
+                            continue;
+                        }
+
+                        $clave = $this->resolveAspelClave($item);
+                        $detailResponse = $this->getProductDetailByClaveWithRetry((string) $clave, $httpAdapter);
+
+                        if (! ($detailResponse['success'] ?? false)) {
+                            $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                                'reason' => 'detail_fetch_failed',
+                                'error' => $detailResponse['error'] ?? null,
+                                'status_code' => $detailResponse['status_code'] ?? null,
+                            ]);
+
+                            $metrics['items_failed']++;
+                            $failedItems[] = [
+                                'stage' => 'detail_fetch',
+                                'clave' => $clave,
+                                'versionSinc' => $this->resolveAspelVersionSinc($item),
+                                'message' => 'Failed to fetch ASPEL product detail.',
+                                'response' => $detailResponse,
                                 'detail_retry_attempts' => $detailResponse['retry_attempts'] ?? 0,
-                            ],
+                            ];
+
+                            continue;
+                        }
+
+                        $normalizedPayload = $this->buildHubspotProductSyncPayload(
+                            $item,
+                            Arr::get($detailResponse, 'data', []),
                             $currentCursor,
-                            $metrics
+                            [
+                                'sinceTs' => $nextSinceTs,
+                                'sinceClave' => $nextSinceClave,
+                            ],
+                            $hasMore
                         );
-                    }
 
-                    $normalizedPayload = $this->buildHubspotProductSyncPayload(
-                        $item,
-                        Arr::get($detailResponse, 'data', []),
-                        $currentCursor,
-                        [
-                            'sinceTs' => $nextSinceTs,
-                            'sinceClave' => $nextSinceClave,
-                        ],
-                        $hasMore
-                    );
+                        $syncResult = $this->processHubspotProductChangeSynchronously($normalizedPayload);
+                        if (! ($syncResult['success'] ?? false)) {
+                            $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                                'reason' => 'hubspot_sync_failed',
+                                'record_id' => $syncResult['record_id'] ?? null,
+                                'message' => $syncResult['message'] ?? null,
+                            ]);
 
-                    $syncResult = $this->processHubspotProductChangeSynchronously($normalizedPayload);
-                    if (! ($syncResult['success'] ?? false)) {
-                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
-                            'reason' => 'hubspot_sync_failed',
+                            $metrics['items_failed']++;
+                            $failedItems[] = [
+                                'stage' => 'hubspot_sync',
+                                'clave' => $normalizedPayload['clave'] ?? null,
+                                'versionSinc' => $normalizedPayload['versionSinc'] ?? null,
+                                'message' => $syncResult['message'] ?? 'Failed to sync ASPEL product change to HubSpot.',
+                                'hubspot_sync' => $syncResult,
+                            ];
+
+                            continue;
+                        }
+
+                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'success', [
+                            'clave' => $normalizedPayload['clave'] ?? null,
+                            'version_sinc' => $normalizedPayload['versionSinc'] ?? null,
                             'record_id' => $syncResult['record_id'] ?? null,
-                            'message' => $syncResult['message'] ?? null,
+                            'hubspot_product_id' => Arr::get($syncResult, 'data.product_id'),
+                        ]);
+
+                        $metrics['items_processed']++;
+                    } catch (\Throwable $exception) {
+                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                            'reason' => 'unexpected_item_error',
+                            'exception' => get_class($exception),
+                            'message' => $exception->getMessage(),
                         ]);
 
                         $metrics['items_failed']++;
-
-                        return $this->failPollingRunForScope(
-                            'products',
-                            'Failed to sync ASPEL product change to HubSpot.',
-                            [
-                                'changes_response' => $pageResponse,
-                                'detail_response' => $detailResponse,
-                                'failed_item' => $item,
-                                'hubspot_sync' => $syncResult,
-                            ],
-                            $currentCursor,
-                            $metrics
-                        );
+                        $failedItems[] = [
+                            'stage' => 'unexpected_item_error',
+                            'clave' => $this->resolveAspelClave($item),
+                            'versionSinc' => $this->resolveAspelVersionSinc($item),
+                            'message' => $exception->getMessage(),
+                            'exception' => get_class($exception),
+                        ];
                     }
+                }
 
-                    $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'success', [
-                        'clave' => $normalizedPayload['clave'] ?? null,
-                        'version_sinc' => $normalizedPayload['versionSinc'] ?? null,
-                        'record_id' => $syncResult['record_id'] ?? null,
-                        'hubspot_product_id' => Arr::get($syncResult, 'data.product_id'),
-                    ]);
-
-                    $metrics['items_processed']++;
+                if ($failedItems !== []) {
+                    return $this->failPollingRunForScope(
+                        'products',
+                        'ASPEL product polling completed the current page with item failures.',
+                        [
+                            'failed_count' => count($failedItems),
+                            'failed_items' => $failedItems,
+                        ],
+                        $currentCursor,
+                        $metrics
+                    );
                 }
 
                 $metrics['pages_processed']++;
@@ -952,6 +1122,32 @@ class AspelService extends GenericPlatformService
             ];
         }
 
+        $validation = $this->normalizeContactPayload($payload);
+        if (! $validation['valid']) {
+            return [
+                'success' => false,
+                'status_code' => 422,
+                'retryable' => false,
+                'request_id' => '',
+                'external_id' => null,
+                'latency_ms' => null,
+                'attempt' => 1,
+                'endpoint' => $this->resolveOperationEndpoint($operation, $payload, $clave),
+                'method' => $this->resolveOperationHttpMethod($operation),
+                'data' => [
+                    'code' => 'invalid_aspel_contact_payload',
+                    'errors' => $validation['errors'],
+                ],
+                'error' => [
+                    'code' => 'invalid_aspel_contact_payload',
+                    'message' => 'ASPEL contact payload validation failed.',
+                    'details' => json_encode($validation['errors'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ],
+            ];
+        }
+
+        $payload = $validation['payload'];
+
         return $this->sendRequest(
             $this->resolveOperationEndpoint($operation, $payload, $clave),
             $this->resolveOperationHttpMethod($operation),
@@ -1117,6 +1313,81 @@ class AspelService extends GenericPlatformService
         return $payload;
     }
 
+    /**
+     * @return array{valid:bool,payload:array<string,mixed>,errors:array<string,list<string>>}
+     */
+    private function normalizeContactPayload(array $payload): array
+    {
+        $errors = [];
+
+        if (array_key_exists('invalido', $payload)) {
+            $value = $payload['invalido'];
+
+            if (is_bool($value)) {
+                $payload['invalido'] = $value ? '1' : '0';
+            } elseif (is_scalar($value) && is_numeric(trim((string) $value))) {
+                $payload['invalido'] = trim((string) $value);
+            } else {
+                $errors['invalido'][] = 'The invalido field must be a numeric value represented as a string.';
+            }
+        }
+
+        if (array_key_exists('referenciaLibre', $payload) && $payload['referenciaLibre'] !== null) {
+            if (! is_scalar($payload['referenciaLibre'])) {
+                $errors['referenciaLibre'][] = 'The referenciaLibre field must be a string.';
+            } else {
+                $payload['referenciaLibre'] = trim((string) $payload['referenciaLibre']);
+
+                if (mb_strlen($payload['referenciaLibre']) > 20) {
+                    $errors['referenciaLibre'][] = 'The referenciaLibre field may not be greater than 20 characters.';
+                }
+            }
+        }
+
+        if (array_key_exists('fechaAlta', $payload) && $payload['fechaAlta'] !== null && $payload['fechaAlta'] !== '') {
+            $normalizedDate = $this->normalizeAspelDate($payload['fechaAlta']);
+
+            if ($normalizedDate === null) {
+                $errors['fechaAlta'][] = 'The fechaAlta field must be a valid ISO date or Unix timestamp.';
+            } else {
+                $payload['fechaAlta'] = $normalizedDate;
+            }
+        }
+
+        return [
+            'valid' => $errors === [],
+            'payload' => $payload,
+            'errors' => $errors,
+        ];
+    }
+
+    private function normalizeAspelDate(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        try {
+            $raw = trim((string) $value);
+            if ($raw === '') {
+                return null;
+            }
+
+            if (is_numeric($raw)) {
+                $timestamp = (float) $raw;
+                $date = abs($timestamp) >= 100000000000
+                    ? Carbon::createFromTimestampMs((int) $timestamp)
+                    : Carbon::createFromTimestamp((int) $timestamp);
+
+                return $date->utc()->format('Y-m-d');
+            }
+
+            return Carbon::parse($raw)->format('Y-m-d');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     private function logAspelLookupResult(array $lookupCriteria, array $lookupResponse, array $payload): void
     {
         $summary = [
@@ -1280,10 +1551,203 @@ class AspelService extends GenericPlatformService
         }
 
         if (preg_match('~/almacenes/?$~i', $endpoint) === 1) {
-            return rtrim($endpoint, '/') . '/' . rawurlencode($articleKey);
+            return rtrim($endpoint, '/').'/'.rawurlencode($articleKey);
         }
 
         return $endpoint;
+    }
+
+    private function replaceFirstEndpointPlaceholder(string $endpoint, string $value): string
+    {
+        if (preg_match('/\{[^}]+\}/', $endpoint) === 1) {
+            return preg_replace('/\{[^}]+\}/', rawurlencode($value), $endpoint, 1) ?: $endpoint;
+        }
+
+        return rtrim($endpoint, '/').'/'.rawurlencode($value);
+    }
+
+    /**
+     * @return array{valid:bool,payload:array<string,mixed>,errors:array<string,list<string>>}
+     */
+    private function normalizeQuotePayload(array $payload): array
+    {
+        $errors = [];
+        $quote = [];
+
+        foreach (['hubspotDealId', 'hubspotQuoteId', 'claveCliente', 'correoVendedor'] as $field) {
+            $value = $this->resolveScalarValue([Arr::get($payload, $field)]);
+            if ($value === null) {
+                $errors[$field][] = 'The '.$field.' field is required.';
+
+                continue;
+            }
+
+            $quote[$field] = $field === 'correoVendedor' ? Str::lower($value) : $value;
+        }
+
+        foreach (['pedidoCliente', 'condicion', 'formaPagoSat', 'usoCfdi', 'regimenFiscal', 'observaciones'] as $field) {
+            $value = Arr::get($payload, $field);
+            if ($value !== null && is_scalar($value)) {
+                $quote[$field] = trim((string) $value);
+            }
+        }
+
+        $formaEnvio = $this->resolveScalarValue([Arr::get($payload, 'formaEnvio')]) ?? 'A';
+        $formaEnvio = Str::upper($formaEnvio);
+        if (! in_array($formaEnvio, ['I', 'C', 'A'], true)) {
+            $errors['formaEnvio'][] = 'The formaEnvio field must be I, C, A or empty.';
+        } else {
+            $quote['formaEnvio'] = $formaEnvio;
+        }
+
+        if (Arr::has($payload, 'fechaEntrega') && Arr::get($payload, 'fechaEntrega') !== '') {
+            $fechaEntrega = $this->normalizeAspelDate(Arr::get($payload, 'fechaEntrega'));
+            if ($fechaEntrega === null) {
+                $errors['fechaEntrega'][] = 'The fechaEntrega field must be a valid ISO date.';
+            } else {
+                $quote['fechaEntrega'] = $fechaEntrega;
+            }
+        }
+
+        foreach (['descuentoGeneral', 'direccionEnvio', 'camposLibres'] as $field) {
+            $value = Arr::get($payload, $field);
+            if ($value !== null) {
+                if (! is_array($value)) {
+                    $errors[$field][] = 'The '.$field.' field must be an object.';
+                } else {
+                    $quote[$field] = $value;
+                }
+            }
+        }
+
+        if (isset($quote['descuentoGeneral'])) {
+            $this->validateDiscount($quote['descuentoGeneral'], 'descuentoGeneral', $errors);
+        }
+
+        $partidas = Arr::get($payload, 'partidas');
+        if (! is_array($partidas) || $partidas === []) {
+            $errors['partidas'][] = 'The partidas field must contain at least one line item.';
+        } else {
+            $quote['partidas'] = [];
+            foreach ($partidas as $index => $partida) {
+                if (! is_array($partida)) {
+                    $errors['partidas.'.$index][] = 'The line item must be an object.';
+
+                    continue;
+                }
+
+                $normalized = $this->normalizeQuoteLineItem($partida, $index, $errors);
+                if ($normalized !== null) {
+                    $quote['partidas'][] = $normalized;
+                }
+            }
+        }
+
+        Arr::forget($quote, [
+            'metodoDePago',
+            'usuario',
+            'CVE_USUARIO',
+            'NOM_USUARIO',
+            'cveUsuario',
+            'nomUsuario',
+        ]);
+
+        return [
+            'valid' => $errors === [],
+            'payload' => $quote,
+            'errors' => $errors,
+        ];
+    }
+
+    private function normalizeQuoteLineItem(array $partida, int|string $index, array &$errors): ?array
+    {
+        $path = 'partidas.'.$index;
+        $normalized = [];
+
+        foreach (['hubspotLineItemId', 'cveArt'] as $field) {
+            $value = $this->resolveScalarValue([Arr::get($partida, $field)]);
+            if ($value === null) {
+                $errors[$path.'.'.$field][] = 'The '.$field.' field is required.';
+            } else {
+                $normalized[$field] = $value;
+            }
+        }
+
+        foreach (['cantidad', 'cveAlmacen', 'listaPrecio', 'precioUnitario', 'iva'] as $field) {
+            $value = Arr::get($partida, $field);
+            if (! is_numeric($value)) {
+                $errors[$path.'.'.$field][] = 'The '.$field.' field must be numeric.';
+
+                continue;
+            }
+
+            $normalized[$field] = match ($field) {
+                'cveAlmacen', 'listaPrecio' => (int) $value,
+                'precioUnitario' => round((float) $value, 6),
+                default => (float) $value,
+            };
+        }
+
+        if (isset($normalized['cantidad']) && $normalized['cantidad'] <= 0) {
+            $errors[$path.'.cantidad'][] = 'The cantidad field must be greater than zero.';
+        }
+
+        if (isset($normalized['iva']) && ! in_array($normalized['iva'], [0.0, 16.0], true)) {
+            $errors[$path.'.iva'][] = 'The iva field must be 0 or 16.';
+        }
+
+        if (Arr::has($partida, 'descuento')) {
+            $discount = Arr::get($partida, 'descuento');
+            if (! is_array($discount)) {
+                $errors[$path.'.descuento'][] = 'The descuento field must be an object.';
+            } else {
+                $this->validateDiscount($discount, $path.'.descuento', $errors);
+                $normalized['descuento'] = $discount;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function validateDiscount(array $discount, string $path, array &$errors): void
+    {
+        $hasPercentage = array_key_exists('porcentaje', $discount) && $discount['porcentaje'] !== null && $discount['porcentaje'] !== '';
+        $hasAmount = array_key_exists('importe', $discount) && $discount['importe'] !== null && $discount['importe'] !== '';
+
+        if ($hasPercentage === $hasAmount) {
+            $errors[$path][] = 'Provide either porcentaje or importe, but not both.';
+
+            return;
+        }
+
+        $key = $hasPercentage ? 'porcentaje' : 'importe';
+        if (! is_numeric($discount[$key]) || (float) $discount[$key] < 0) {
+            $errors[$path.'.'.$key][] = 'The '.$key.' field must be a non-negative number.';
+        }
+    }
+
+    private function localValidationError(string $message, array $errors, string $code = 'invalid_aspel_request'): array
+    {
+        return [
+            'success' => false,
+            'status_code' => 422,
+            'retryable' => false,
+            'request_id' => '',
+            'external_id' => null,
+            'latency_ms' => null,
+            'attempt' => 1,
+            'endpoint' => $this->event ? $this->resolveEndpoint($this->event) : '',
+            'method' => $this->event ? $this->resolveMethod($this->event) : '',
+            'data' => [
+                'code' => $code,
+                'errors' => $errors,
+            ],
+            'error' => [
+                'code' => $code,
+                'message' => $message,
+                'details' => json_encode($errors, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ],
+        ];
     }
 
     /**
@@ -1326,17 +1790,36 @@ class AspelService extends GenericPlatformService
 
     private function loadCursorStateForScope(string $scope): array
     {
+        $persistedSinceTs = $this->normalizeCursorValue($this->getCursorValue('since_ts', $scope));
+        $persistedSinceClave = $this->normalizeCursorValue($this->getCursorValue('since_clave', $scope));
+        $initialLookbackMinutes = $this->resolveInitialLookbackMinutes();
+
         Log::info('Loading ASPEL sync cursor state.', [
             'scope' => $scope,
-            'sinceTs' => $this->normalizeCursorValue($this->getCursorValue($suffix = 'since_ts', $scope)),
-            'sinceClave' => $this->normalizeCursorValue($this->getCursorValue('since_clave', $scope)),
+            'sinceTs' => $persistedSinceTs,
+            'sinceClave' => $persistedSinceClave,
+            'initial_lookback_minutes' => $initialLookbackMinutes,
         ]);
 
         return [
-            'sinceTs' => $this->normalizeCursorValue($this->getCursorValue('since_ts', $scope))
-                ?? now()->subHours(self::DEFAULT_INITIAL_LOOKBACK_HOURS)->toISOString(),
-            'sinceClave' => $this->normalizeCursorValue($this->getCursorValue('since_clave', $scope)) ?? '',
+            'sinceTs' => $persistedSinceTs ?? now()->subMinutes($initialLookbackMinutes)->toISOString(),
+            'sinceClave' => $persistedSinceClave ?? '',
         ];
+    }
+
+    private function resolveInitialLookbackMinutes(): int
+    {
+        $minutes = Arr::get($this->event?->meta ?? [], 'initial_lookback_minutes');
+        if (is_numeric($minutes) && (float) $minutes > 0) {
+            return max(1, (int) ceil((float) $minutes));
+        }
+
+        $hours = Arr::get($this->event?->meta ?? [], 'initial_lookback_hours');
+        if (is_numeric($hours) && (float) $hours > 0) {
+            return max(1, (int) ceil((float) $hours * 60));
+        }
+
+        return self::DEFAULT_INITIAL_LOOKBACK_HOURS * 60;
     }
 
     private function persistCursorStateForScope(string $scope, array $cursor): void
@@ -1750,7 +2233,7 @@ class AspelService extends GenericPlatformService
         $eventLoggingService->logEventSuccess($record, Arr::get($result, 'message', 'Synchronous event processed.'));
 
         if ($event->to_event && $this->shouldDispatchNextPayload($outputPayload)) {
-            $preparedPayload = app(\App\Services\EventFlowService::class)->transformPayloadForEvent($event, $outputPayload);
+            $preparedPayload = app(EventFlowService::class)->transformPayloadForEvent($event, $outputPayload);
 
             return $this->processEventSynchronously($event->to_event, $preparedPayload, $record);
         }

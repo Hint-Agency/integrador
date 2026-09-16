@@ -14,8 +14,7 @@ class GenericHttpAdapter
 {
     public function __construct(
         protected RateLimitService $rateLimitService
-    ) {
-    }
+    ) {}
 
     public function send(
         string $platform,
@@ -72,6 +71,7 @@ class GenericHttpAdapter
 
                     usleep($backoffMs * 1000);
                     $attempt++;
+
                     continue;
                 }
 
@@ -97,6 +97,7 @@ class GenericHttpAdapter
                     $this->rateLimitService->logBackoff($platform, $endpoint, 0, null, $attempt, $backoffMs);
                     usleep($backoffMs * 1000);
                     $attempt++;
+
                     continue;
                 }
 
@@ -124,6 +125,7 @@ class GenericHttpAdapter
                     $this->rateLimitService->logBackoff($platform, $endpoint, $status, $retryAfter, $attempt, $backoffMs);
                     usleep($backoffMs * 1000);
                     $attempt++;
+
                     continue;
                 }
 
@@ -145,6 +147,7 @@ class GenericHttpAdapter
     ): array {
         $success = $status >= 200 && $status < 300;
         $retryable = $retryable ?? $this->isRetryable($status);
+        $error ??= $success ? null : $this->extractApiError($data, $status);
 
         return [
             'success' => $success,
@@ -162,6 +165,29 @@ class GenericHttpAdapter
                 'message' => null,
                 'details' => null,
             ],
+        ];
+    }
+
+    private function extractApiError(array $data, int $status): array
+    {
+        $nestedError = Arr::get($data, 'error');
+        $code = Arr::get($data, 'code')
+            ?? (is_array($nestedError) ? Arr::get($nestedError, 'code') : null);
+        $message = Arr::get($data, 'message')
+            ?? Arr::get($data, 'detail')
+            ?? Arr::get($data, 'title')
+            ?? (is_string($nestedError) ? $nestedError : null)
+            ?? 'External API request failed with HTTP '.$status.'.';
+        $details = Arr::get($data, 'errors')
+            ?? (is_array($nestedError) ? Arr::get($nestedError, 'details') : null)
+            ?? $data;
+
+        return [
+            'code' => is_scalar($code) ? (string) $code : null,
+            'message' => is_scalar($message) ? (string) $message : 'External API request failed.',
+            'details' => is_string($details)
+                ? $details
+                : json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ];
     }
 
@@ -222,7 +248,7 @@ class GenericHttpAdapter
                 continue;
             }
 
-            if ($host === $domain || str_ends_with($host, '.' . $domain)) {
+            if ($host === $domain || str_ends_with($host, '.'.$domain)) {
                 return;
             }
         }
@@ -246,6 +272,7 @@ class GenericHttpAdapter
         }
 
         $diff = $timestamp - time();
+
         return $diff > 0 ? $diff : null;
     }
 }

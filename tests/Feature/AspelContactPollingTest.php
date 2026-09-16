@@ -15,6 +15,7 @@ use App\Services\Generic\AuthStrategyResolver;
 use App\Services\Generic\GenericHttpAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
@@ -22,6 +23,68 @@ use Tests\TestCase;
 class AspelContactPollingTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_it_uses_event_lookback_minutes_when_contact_cursor_does_not_exist(): void
+    {
+        Carbon::setTestNow('2026-09-15T12:00:00Z');
+
+        [$aspelPlatform, $scheduleEvent, $record] = $this->preparePollingContext();
+        $scheduleEvent->update([
+            'meta' => array_merge($scheduleEvent->meta ?? [], [
+                'initial_lookback_hours' => 1,
+                'initial_lookback_minutes' => 15,
+            ]),
+        ]);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')
+            ->once()
+            ->withArgs(function (
+                string $platform,
+                string $endpoint,
+                string $method,
+                array $headers,
+                array $query
+            ): bool {
+                return $platform === 'aspel'
+                    && $method === 'GET'
+                    && $query['sinceTs'] === '2026-09-15T11:45:00.000000Z'
+                    && $query['sinceClave'] === ''
+                    && $query['take'] === 200;
+            })
+            ->andReturn([
+                'success' => true,
+                'status_code' => 200,
+                'retryable' => false,
+                'request_id' => 'req_changes_empty',
+                'external_id' => null,
+                'latency_ms' => 5,
+                'attempt' => 1,
+                'endpoint' => 'https://api.example.com/api/contacts/changes',
+                'method' => 'GET',
+                'data' => [
+                    'items' => [],
+                    'nextSinceTs' => '2026-09-15T11:45:00.000000Z',
+                    'nextSinceClave' => '',
+                    'hasMore' => false,
+                ],
+                'error' => ['code' => null, 'message' => null, 'details' => null],
+            ]);
+
+        $service = new AspelService(
+            $aspelPlatform,
+            app(AuthStrategyResolver::class),
+            $scheduleEvent->fresh(),
+            $record,
+        );
+
+        $result = $service->getUpdatedContacts([], $adapter);
+
+        $this->assertTrue($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $this->assertSame('2026-09-15T11:45:00.000000Z', data_get($result, 'data.cursor.sinceTs'));
+
+        Carbon::setTestNow();
+    }
 
     public function test_it_processes_changed_contacts_and_persists_cursor_on_success(): void
     {
@@ -127,7 +190,7 @@ class AspelContactPollingTest extends TestCase
         ]);
     }
 
-    public function test_it_does_not_advance_cursor_when_hubspot_sync_fails(): void
+    public function test_it_continues_the_page_and_does_not_advance_cursor_when_hubspot_sync_fails(): void
     {
         config()->set('hubspot.access_token', 'token_123');
         config()->set('hubspot.base_url', 'https://api.hubapi.test');
@@ -136,6 +199,16 @@ class AspelContactPollingTest extends TestCase
 
         Http::fake(function (Request $request) {
             if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
+                $filter = $request->data()['filterGroups'][0]['filters'][0] ?? [];
+                if (($filter['propertyName'] ?? null) === 'clave' && ($filter['value'] ?? null) === '50903') {
+                    return Http::response([
+                        'results' => [[
+                            'id' => '402',
+                            'properties' => ['clave' => '50903'],
+                        ]],
+                    ], 200);
+                }
+
                 return Http::response(['results' => []], 200);
             }
 
@@ -145,6 +218,13 @@ class AspelContactPollingTest extends TestCase
                     'message' => 'HubSpot validation failed',
                     'category' => 'VALIDATION_ERROR',
                 ], 400);
+            }
+
+            if ($request->method() === 'PATCH' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/402') {
+                return Http::response([
+                    'id' => '402',
+                    'properties' => $request->data()['properties'] ?? [],
+                ], 200);
             }
 
             return Http::response(['error' => 'Unexpected request'], 500);
@@ -162,16 +242,45 @@ class AspelContactPollingTest extends TestCase
             'endpoint' => 'https://api.example.com/api/contacts/changes',
             'method' => 'GET',
             'data' => [
-                'items' => [[
-                    'clave' => '50902',
-                    'nombre' => 'JUAN CARLOS LOPEZ MARTINEZ',
-                    'rfc' => 'LOMJ850214H12',
-                    'status' => 'A',
-                    'versionSinc' => '2026-05-07 10:00:00',
-                ]],
-                'nextSinceTs' => '2026-05-07 10:00:00',
-                'nextSinceClave' => '50902',
+                'items' => [
+                    [
+                        'clave' => '50902',
+                        'nombre' => 'JUAN CARLOS LOPEZ MARTINEZ',
+                        'rfc' => 'LOMJ850214H12',
+                        'status' => 'A',
+                        'versionSinc' => '2026-05-07 10:00:00',
+                    ],
+                    [
+                        'clave' => '50903',
+                        'nombre' => 'MARIA LOPEZ MARTINEZ',
+                        'rfc' => 'LOMM850214H12',
+                        'status' => 'A',
+                        'versionSinc' => '2026-05-07 10:01:00',
+                    ],
+                ],
+                'nextSinceTs' => '2026-05-07 10:01:00',
+                'nextSinceClave' => '50903',
                 'hasMore' => false,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_detail_2',
+            'external_id' => '50903',
+            'latency_ms' => 8,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/contacts/50903',
+            'method' => 'GET',
+            'data' => [
+                'clave' => '50903',
+                'nombre' => 'MARIA LOPEZ MARTINEZ',
+                'rfc' => 'LOMM850214H12',
+                'telefono' => '5551234568',
+                'emailEnvio' => 'maria.lopez@example.com',
+                'status' => 'A',
             ],
             'error' => ['code' => null, 'message' => null, 'details' => null],
         ])->ordered();
@@ -209,10 +318,13 @@ class AspelContactPollingTest extends TestCase
         $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_ts')->first());
         $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_clave')->first());
         $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.last_run_status')->first()?->value, 'value'));
+        $this->assertSame(2, data_get($result, 'data.polling_metrics.items_seen'));
+        $this->assertSame(1, data_get($result, 'data.polling_metrics.items_processed'));
+        $this->assertSame(1, data_get($result, 'data.polling_metrics.items_failed'));
+        $this->assertSame('50902', data_get($result, 'data.failure_context.failed_items.0.clave'));
 
-        $idempotency = EventIdempotencyKey::query()->where('event_id', $scheduleEvent->id)->first();
-        $this->assertNotNull($idempotency);
-        $this->assertSame('failed', $idempotency->status);
+        $this->assertSame(1, EventIdempotencyKey::query()->where('event_id', $scheduleEvent->id)->where('status', 'failed')->count());
+        $this->assertSame(1, EventIdempotencyKey::query()->where('event_id', $scheduleEvent->id)->where('status', 'success')->count());
     }
 
     public function test_it_processes_multiple_pages_and_advances_cursor_after_last_page(): void
@@ -422,8 +534,8 @@ class AspelContactPollingTest extends TestCase
         $this->assertFalse($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_ts')->first());
         $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.last_run_status')->first()?->value, 'value'));
-        $this->assertSame('Failed to fetch ASPEL contact detail.', $result['message']);
-        $this->assertSame(3, data_get($result, 'data.failure_context.detail_response.retry_attempts'));
+        $this->assertSame('ASPEL contact polling completed the current page with item failures.', $result['message']);
+        $this->assertSame(3, data_get($result, 'data.failure_context.failed_items.0.detail_retry_attempts'));
     }
 
     public function test_it_processes_create_fallback_synchronously_during_polling(): void

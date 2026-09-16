@@ -923,4 +923,351 @@ class AspelServiceTest extends TestCase
         $this->assertSame(['001', '002'], $response['data']['selected_warehouses']);
         $this->assertSame(['001', '002'], $response['data']['matched_warehouses']);
     }
+
+    public function test_it_skips_create_fallback_when_previous_event_updated_the_contact(): void
+    {
+        [$service] = $this->makeAspelOperationService(
+            'createContact',
+            'POST',
+            '/api/contacts'
+        );
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldNotReceive('send');
+
+        $response = $service->createContact([
+            'hubspot_object_id' => '248690483531',
+            'destination_response' => [
+                'success' => true,
+                'data' => [
+                    'clave' => '58330',
+                    'updated_count' => 1,
+                    'not_found_count' => 0,
+                    'output_payload' => [],
+                ],
+            ],
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('skipped', data_get($response, 'data.operation'));
+        $this->assertSame('contact_already_updated', data_get($response, 'data.skip_reason'));
+        $this->assertSame('58330', data_get($response, 'data.clave'));
+        $this->assertSame(0, data_get($response, 'data.created_count'));
+    }
+
+    public function test_it_normalizes_empresa_02_contact_fields_and_omits_technical_identifiers(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Create Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'createContact',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'POST',
+            'base_url' => 'https://api.example.com',
+            'path' => '/api/contacts',
+            'active' => true,
+        ]);
+
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event);
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/api/contacts'
+                && $method === 'POST'
+                && ($body['invalido'] ?? null) === '1'
+                && ($body['referenciaLibre'] ?? null) === 'REFERENCIA CORTA'
+                && ($body['fechaAlta'] ?? null) === '2026-09-02'
+                && ! array_key_exists('hubspotObjectId', $body)
+                && ! array_key_exists('CVE_USUARIO', $body)
+                && ! array_key_exists('NOM_USUARIO', $body);
+        })->andReturn([
+            'success' => true,
+            'status_code' => 201,
+            'retryable' => false,
+            'data' => ['clave' => '50902'],
+        ]);
+
+        $response = $service->createContact([
+            'nombre' => 'Demo Integrador',
+            'invalido' => 1,
+            'referenciaLibre' => ' REFERENCIA CORTA ',
+            'fechaAlta' => '2026-09-02T15:30:00-06:00',
+            'hubspotObjectId' => '208589143093',
+            'CVE_USUARIO' => 1,
+            'NOM_USUARIO' => 'INTEGRADOR',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+    }
+
+    public function test_it_rejects_invalid_empresa_02_contact_fields_before_calling_aspel(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma',
+            'type' => 'generic',
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Create Contact ASPEL',
+            'event_type_id' => 'generic.external.call',
+            'method_name' => 'createContact',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'POST',
+            'base_url' => 'https://api.example.com',
+            'path' => '/api/contacts',
+            'active' => true,
+        ]);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldNotReceive('send');
+        $service = new AspelService($platform, app(AuthStrategyResolver::class), $event);
+
+        $response = $service->createContact([
+            'nombre' => 'Demo Integrador',
+            'invalido' => 'NO',
+            'referenciaLibre' => 'ESTA REFERENCIA SUPERA VEINTE CARACTERES',
+            'fechaAlta' => 'not-a-date',
+        ], $adapter);
+
+        $this->assertFalse($response['success']);
+        $this->assertSame(422, $response['status_code']);
+        $this->assertFalse($response['retryable']);
+        $this->assertSame('invalid_aspel_contact_payload', $response['error']['code']);
+        $this->assertSame(
+            ['invalido', 'referenciaLibre', 'fechaAlta'],
+            array_keys($response['data']['errors'])
+        );
+    }
+
+    public function test_it_fetches_aspel_product_prices_by_sku(): void
+    {
+        [$service] = $this->makeAspelOperationService(
+            'getProductPrices',
+            'GET',
+            '/api/products/{sku}/prices'
+        );
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(fn (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool => $platformKey === 'aspel'
+            && $endpoint === 'https://api.example.com/api/products/10040003/prices'
+            && $method === 'GET'
+            && $body === [])->andReturn([
+                'success' => true,
+                'status_code' => 200,
+                'retryable' => false,
+                'data' => [
+                    'cveArt' => '10040003',
+                    'prices' => [[
+                        'listaPrecio' => 7,
+                        'descripcion' => 'Medico lista (1 pago)',
+                        'precio' => 5637,
+                        'incluyeImpuestos' => false,
+                    ]],
+                ],
+            ]);
+
+        $response = $service->getProductPrices(['sku' => '10040003'], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame(7, $response['data']['prices'][0]['listaPrecio']);
+    }
+
+    public function test_it_fetches_raw_aspel_warehouses_for_quote_selection(): void
+    {
+        [$service] = $this->makeAspelOperationService(
+            'getProductWarehouses',
+            'GET',
+            '/api/almacenes/{sku}'
+        );
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(fn (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool => $platformKey === 'aspel'
+            && $endpoint === 'https://api.example.com/api/almacenes/10040003'
+            && $method === 'GET'
+            && $body === [])->andReturn([
+                'success' => true,
+                'status_code' => 200,
+                'retryable' => false,
+                'data' => [[
+                    'cveArt' => '10040003',
+                    'cveAlm' => '5',
+                    'exist' => 12.5,
+                    'stockMax' => 100,
+                    'stockMin' => 10,
+                ]],
+            ]);
+
+        $response = $service->getProductWarehouses(['clave' => '10040003'], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('5', $response['data'][0]['cveAlm']);
+    }
+
+    public function test_it_validates_and_creates_an_aspel_quote_without_technical_user_fields(): void
+    {
+        [$service] = $this->makeAspelOperationService('createQuote', 'POST', '/api/quotes');
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool {
+            return $platformKey === 'aspel'
+                && $endpoint === 'https://api.example.com/api/quotes'
+                && $method === 'POST'
+                && ($body['correoVendedor'] ?? null) === 'vendedor@empresa.com'
+                && ($body['fechaEntrega'] ?? null) === '2026-09-10'
+                && ($body['partidas'][0]['precioUnitario'] ?? null) === 5637.123457
+                && ($body['partidas'][0]['cveAlmacen'] ?? null) === 5
+                && ! array_key_exists('metodoDePago', $body)
+                && ! array_key_exists('CVE_USUARIO', $body)
+                && ! array_key_exists('NOM_USUARIO', $body);
+        })->andReturn([
+            'success' => true,
+            'status_code' => 201,
+            'retryable' => false,
+            'data' => [
+                'created' => true,
+                'cveDoc' => '0000012699',
+                'folio' => 12699,
+            ],
+        ]);
+
+        $response = $service->createQuote([
+            'hubspotDealId' => '123456789',
+            'hubspotQuoteId' => '987654321',
+            'claveCliente' => '39489',
+            'correoVendedor' => ' VENDEDOR@EMPRESA.COM ',
+            'fechaEntrega' => '2026-09-10T09:00:00-06:00',
+            'formaEnvio' => 'a',
+            'formaPagoSat' => '03',
+            'metodoDePago' => 'CHEQUE',
+            'CVE_USUARIO' => 1,
+            'NOM_USUARIO' => 'INTEGRADOR',
+            'partidas' => [[
+                'hubspotLineItemId' => '555001',
+                'cveArt' => '10040003',
+                'cantidad' => 1,
+                'cveAlmacen' => '5',
+                'listaPrecio' => '7',
+                'precioUnitario' => '5637.1234567',
+                'iva' => 0,
+                'descuento' => ['porcentaje' => 5],
+            ]],
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('0000012699', $response['data']['cveDoc']);
+    }
+
+    public function test_it_rejects_invalid_aspel_quote_before_the_http_request(): void
+    {
+        [$service] = $this->makeAspelOperationService('createQuote', 'POST', '/api/quotes');
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldNotReceive('send');
+
+        $response = $service->createQuote([
+            'hubspotDealId' => '123456789',
+            'formaEnvio' => 'X',
+            'partidas' => [[
+                'hubspotLineItemId' => '555001',
+                'cveArt' => '10040003',
+                'cantidad' => 0,
+                'cveAlmacen' => 5,
+                'listaPrecio' => 7,
+                'precioUnitario' => 5637,
+                'iva' => 8,
+                'descuento' => ['porcentaje' => 5, 'importe' => 100],
+            ]],
+        ], $adapter);
+
+        $this->assertFalse($response['success']);
+        $this->assertSame(422, $response['status_code']);
+        $this->assertSame('invalid_aspel_quote_payload', $response['error']['code']);
+        $this->assertArrayHasKey('hubspotQuoteId', $response['data']['errors']);
+        $this->assertArrayHasKey('partidas.0.iva', $response['data']['errors']);
+    }
+
+    /**
+     * @return array{0:AspelService,1:Event,2:Platform}
+     */
+    private function makeAspelOperationService(string $methodName, string $httpMethod, string $path): array
+    {
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL Fertifarma',
+            'slug' => 'aspel-fertifarma-'.strtolower($methodName),
+            'type' => 'generic',
+            'credentials' => ['api_key' => 'token_123'],
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => $methodName,
+            'event_type_id' => 'generic.external.call',
+            'method_name' => $methodName,
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => $httpMethod,
+            'base_url' => 'https://api.example.com',
+            'path' => $path,
+            'auth_mode' => 'bearer_api_key',
+            'auth_config_json' => [
+                'header_name' => 'X-API-Key',
+                'header_prefix' => '',
+            ],
+            'active' => true,
+        ]);
+
+        return [
+            new AspelService($platform, app(AuthStrategyResolver::class), $event),
+            $event,
+            $platform,
+        ];
+    }
 }

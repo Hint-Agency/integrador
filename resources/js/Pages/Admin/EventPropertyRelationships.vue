@@ -234,8 +234,8 @@ const submit = () => {
 
                     <label class="field">
                         <span>Meta JSON</span>
-                        <textarea v-model="form.meta_text" rows="5" placeholder='{"transform":"decimal"}' />
-                        <small>Opcional. Úsalo para hints de transformación o metadata del mapeo.</small>
+                        <textarea v-model="form.meta_text" rows="5" placeholder='{"transform":"decimal","default_value":0,"apply_default_when":["missing","null","empty"]}' />
+                        <small>Opcional. Admite transformaciones y valores predeterminados cuando la propiedad origen no existe, es nula o está vacía.</small>
                     </label>
 
                     <label class="check">

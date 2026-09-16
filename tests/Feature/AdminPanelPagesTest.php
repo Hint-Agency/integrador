@@ -15,6 +15,7 @@ use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
 
 class AdminPanelPagesTest extends TestCase
@@ -183,6 +184,90 @@ class AdminPanelPagesTest extends TestCase
         $response->assertStatus(200);
     }
 
+    public function test_admin_events_page_lists_only_root_events_with_their_complete_flow(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'events.manage');
+
+        $platform = Platform::query()->create([
+            'name' => 'HubSpot',
+            'slug' => 'hubspot',
+            'type' => 'hubspot',
+            'active' => true,
+        ]);
+        $child = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Update destination',
+            'event_type_id' => 'object.updated',
+            'method_name' => 'updateObject',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+        $root = Event::query()->create([
+            'platform_id' => $platform->id,
+            'to_event_id' => $child->id,
+            'name' => 'Contact trigger',
+            'event_type_id' => 'contact.propertyChange',
+            'subscription_type' => 'contact.propertyChange',
+            'type' => 'webhook',
+            'active' => true,
+        ]);
+
+        $response = $this->actingAs($actor)->get('/admin/events');
+
+        $response->assertInertia(fn (Assert $page) => $page
+            ->component('Admin/Events')
+            ->where('total_events', 2)
+            ->where('events.total', 1)
+            ->where('events.data.0.id', $root->id)
+            ->where('events.data.0.flow.chain', [$root->id, $child->id])
+            ->has('events.data.0.flow.nodes', 2)
+        );
+    }
+
+    public function test_event_workflow_detail_exposes_node_configuration_for_the_inspector(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'events.view');
+
+        $platform = Platform::query()->create([
+            'name' => 'ASPEL',
+            'slug' => 'aspel',
+            'type' => 'generic',
+            'settings' => ['service_driver' => 'aspel'],
+            'active' => true,
+        ]);
+        $event = Event::query()->create([
+            'platform_id' => $platform->id,
+            'name' => 'Polling contacts',
+            'event_type_id' => 'schedule',
+            'method_name' => 'getUpdatedContacts',
+            'type' => 'schedule',
+            'schedule_expression' => '*/5 * * * *',
+            'active' => true,
+        ]);
+        EventHttpConfig::query()->create([
+            'event_id' => $event->id,
+            'method' => 'GET',
+            'base_url' => 'https://api.example.com',
+            'path' => 'api/contacts/changes',
+            'active' => true,
+        ]);
+
+        $response = $this->actingAs($actor)->get('/events/'.$event->id);
+
+        $response->assertInertia(fn (Assert $page) => $page
+            ->component('Events/Show')
+            ->where('can_manage_events', false)
+            ->where('event.method_name', 'getUpdatedContacts')
+            ->where('event.schedule_expression', '*/5 * * * *')
+            ->where('flow.nodes.0.method_name', 'getUpdatedContacts')
+            ->where('flow.nodes.0.endpoint', 'GET api/contacts/changes')
+        );
+    }
+
     public function test_admin_events_edit_page_is_accessible_with_permission(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);
@@ -196,7 +281,7 @@ class AdminPanelPagesTest extends TestCase
             'active' => true,
         ]);
 
-        $event = \App\Models\Event::query()->create([
+        $event = Event::query()->create([
             'platform_id' => $platform->id,
             'name' => 'Deal Created',
             'event_type_id' => 'deal.created',
@@ -444,7 +529,7 @@ class AdminPanelPagesTest extends TestCase
         ]);
 
         $response->assertRedirect();
-        $event = \App\Models\Event::query()->where('name', 'Nightly Sync')->firstOrFail();
+        $event = Event::query()->where('name', 'Nightly Sync')->firstOrFail();
 
         $this->assertSame('*/5 * * * *', $event->schedule_expression);
         $this->assertTrue((bool) $event->enable_update_hubdb);
@@ -478,7 +563,7 @@ class AdminPanelPagesTest extends TestCase
             'active' => true,
         ]);
 
-        $event = \App\Models\Event::query()->create([
+        $event = Event::query()->create([
             'platform_id' => $platform->id,
             'name' => 'Nightly Sync',
             'event_type_id' => 'generic.external.call',

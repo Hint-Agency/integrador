@@ -3,24 +3,24 @@
 namespace App\Http\Controllers;
 
 use App\Enums\EventType;
+use App\Jobs\ExecuteEventJob;
 use App\Models\Event;
-use Illuminate\Support\Arr;
 use App\Services\EventFlowService;
 use App\Services\EventProcessingService;
 use App\Services\EventTriggerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-use Illuminate\Support\Facades\Log;
 
 class EventController extends Controller
 {
     public function __construct(
         protected EventFlowService $eventFlowService,
         protected EventProcessingService $eventProcessingService
-    ) {
-    }
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -70,7 +70,7 @@ class EventController extends Controller
 
     public function show(Request $request, Event $event)
     {
-        $event->load(['platform', 'to_event']);
+        $event->load(['platform', 'to_event', 'httpConfig']);
 
         if ($request->expectsJson() || $request->is('api/*')) {
             $event->load('httpConfig');
@@ -94,8 +94,15 @@ class EventController extends Controller
                 'type' => $event->type,
                 'active' => (bool) $event->active,
                 'to_event_id' => $event->to_event_id,
+                'method_name' => $event->getMethodName() ?? $event->method_name,
+                'subscription_type' => $event->subscription_type,
+                'schedule_expression' => $event->schedule_expression,
+                'endpoint' => $event->httpConfig
+                    ? trim($event->httpConfig->method.' '.trim($event->httpConfig->path ?? '', '/'))
+                    : $event->endpoint_api,
             ],
             'flow' => $this->eventFlowService->getEventFlow($event),
+            'can_manage_events' => $request->user()?->hasPermission('events.manage') ?? false,
         ]);
     }
 
@@ -156,7 +163,7 @@ class EventController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Error getting event flow: ' . $exception->getMessage(),
+                'message' => 'Error getting event flow: '.$exception->getMessage(),
             ], 500);
         }
     }
@@ -179,7 +186,7 @@ class EventController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Error executing event flow: ' . $exception->getMessage(),
+                'message' => 'Error executing event flow: '.$exception->getMessage(),
             ], 500);
         }
     }
@@ -243,7 +250,7 @@ class EventController extends Controller
             ], 400);
         }
 
-        \App\Jobs\ExecuteEventJob::dispatch($event)->onQueue('events');
+        ExecuteEventJob::dispatch($event)->onQueue('events');
 
         return response()->json([
             'success' => true,
@@ -358,6 +365,7 @@ class EventController extends Controller
     {
         if (! is_array($httpConfig) || ! $this->hasHttpConfigData($httpConfig)) {
             $event->httpConfig()->delete();
+
             return;
         }
 
@@ -429,7 +437,7 @@ class EventController extends Controller
                 continue;
             }
 
-            if ($host === $domain || str_ends_with($host, '.' . $domain)) {
+            if ($host === $domain || str_ends_with($host, '.'.$domain)) {
                 return;
             }
         }

@@ -98,6 +98,93 @@ class HubspotAspelProductSyncTest extends TestCase
         $this->assertSame($this->buildAspelProductPayload(), $result['data']['output_payload']);
     }
 
+    public function test_it_applies_independent_default_prices_from_relationship_meta(): void
+    {
+        config()->set('hubspot.access_token', 'token_123');
+        config()->set('hubspot.base_url', 'https://api.hubapi.test');
+
+        Http::fake(function (Request $request) {
+            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/products/search') {
+                return Http::response([
+                    'results' => [[
+                        'id' => '901',
+                        'properties' => ['clave' => 'A001'],
+                    ]],
+                ], 200);
+            }
+
+            if ($request->method() === 'PATCH' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/products/901') {
+                return Http::response([
+                    'id' => '901',
+                    'properties' => $request->data()['properties'] ?? [],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        [$hubspotPlatform, $syncEvent, $record] = $this->prepareAspelHubspotProductSyncContext();
+        $aspelPlatform = Platform::query()->where('slug', 'aspel')->firstOrFail();
+        $mappingEventId = (int) data_get($syncEvent->meta, 'mapping_event_id');
+
+        foreach (['mxn', 'usd'] as $currency) {
+            $hubspotPrice = Property::query()->create([
+                'platform_id' => $hubspotPlatform->id,
+                'name' => 'Price '.strtoupper($currency),
+                'key' => 'price_'.$currency,
+                'type' => 'number',
+                'active' => true,
+            ]);
+            $aspelPrice = Property::query()->create([
+                'platform_id' => $aspelPlatform->id,
+                'name' => 'Precio '.strtoupper($currency),
+                'key' => 'precio_'.$currency,
+                'type' => 'number',
+                'active' => true,
+            ]);
+
+            PropertyRelationship::query()->create([
+                'event_id' => $mappingEventId,
+                'property_id' => $hubspotPrice->id,
+                'related_property_id' => $aspelPrice->id,
+                'active' => true,
+                'meta' => [
+                    'currency' => strtoupper($currency),
+                    'default_value' => 0,
+                    'apply_default_when' => ['missing', 'null', 'empty'],
+                    'transform' => 'decimal',
+                ],
+            ]);
+        }
+
+        $service = app()->make(HubspotService::class, [
+            'platform' => $hubspotPlatform,
+            'event' => $syncEvent,
+            'record' => $record,
+        ]);
+
+        $result = $service->updateAspelProductInHubspot($this->buildAspelProductPayload());
+
+        $this->assertTrue($result['success']);
+        Http::assertSent(function (Request $request): bool {
+            if ($request->method() !== 'PATCH') {
+                return false;
+            }
+
+            $properties = $request->data()['properties'] ?? [];
+
+            return ($properties['price_mxn'] ?? null) === 0.0
+                && ($properties['price_usd'] ?? null) === 0.0;
+        });
+
+        $defaults = $record->fresh()->details['mapping_defaults_applied'] ?? [];
+        $this->assertCount(2, $defaults);
+        $this->assertSame(
+            ['price_mxn', 'price_usd'],
+            array_column($defaults, 'destination_property')
+        );
+    }
+
     public function test_it_creates_hubspot_product_from_explicit_create_fallback(): void
     {
         config()->set('hubspot.access_token', 'token_123');

@@ -11,6 +11,7 @@ use App\Models\Record;
 use App\Services\Base\BaseService;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 
 class HubspotService extends BaseService
 {
@@ -3105,6 +3106,7 @@ class HubspotService extends BaseService
         }
 
         $properties = [];
+        $defaultsApplied = [];
         $nestedData = Arr::get($sourceData, 'data', []);
 
         $relationships = $mappingEvent->propertyRelationships
@@ -3118,10 +3120,29 @@ class HubspotService extends BaseService
                 continue;
             }
 
+            $sourceExists = Arr::has($sourceData, $sourceKey)
+                || (is_array($nestedData) && Arr::has($nestedData, $sourceKey));
             $value = $this->firstMappedValue([
                 Arr::get($sourceData, $sourceKey),
                 Arr::get($nestedData, $sourceKey),
             ]);
+
+            $defaultResolution = $this->resolveRelationshipDefaultValue(
+                $relationship,
+                $value,
+                $sourceExists
+            );
+            $value = $defaultResolution['value'];
+
+            if ($defaultResolution['applied']) {
+                $defaultsApplied[] = [
+                    'relationship_id' => $relationship->id,
+                    'source_property' => $sourceKey,
+                    'destination_property' => $hubspotKey,
+                    'reason' => $defaultResolution['reason'],
+                    'default_value' => $value,
+                ];
+            }
 
             if ($value === null) {
                 continue;
@@ -3132,7 +3153,70 @@ class HubspotService extends BaseService
             );
         }
 
+        $this->recordMappingDefaultsApplied($defaultsApplied);
+
         return $properties;
+    }
+
+    /**
+     * @return array{value:mixed,applied:bool,reason:?string}
+     */
+    private function resolveRelationshipDefaultValue(
+        PropertyRelationship $relationship,
+        mixed $value,
+        bool $sourceExists
+    ): array {
+        $meta = is_array($relationship->meta) ? $relationship->meta : [];
+        if (! array_key_exists('default_value', $meta)) {
+            return ['value' => $value, 'applied' => false, 'reason' => null];
+        }
+
+        $reason = match (true) {
+            ! $sourceExists => 'missing',
+            $value === null => 'null',
+            is_string($value) && trim($value) === '' => 'empty',
+            default => null,
+        };
+
+        if ($reason === null) {
+            return ['value' => $value, 'applied' => false, 'reason' => null];
+        }
+
+        $configuredConditions = Arr::wrap($meta['apply_default_when'] ?? ['missing', 'null']);
+        $conditions = array_values(array_filter(array_map(
+            static fn (mixed $condition): ?string => is_scalar($condition)
+                ? Str::lower(trim((string) $condition))
+                : null,
+            $configuredConditions
+        )));
+
+        if (! in_array($reason, $conditions, true)) {
+            return ['value' => $value, 'applied' => false, 'reason' => null];
+        }
+
+        return [
+            'value' => $meta['default_value'],
+            'applied' => true,
+            'reason' => $reason,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $defaultsApplied
+     */
+    private function recordMappingDefaultsApplied(array $defaultsApplied): void
+    {
+        if ($defaultsApplied === [] || ! $this->record) {
+            return;
+        }
+
+        $details = is_array($this->record->details) ? $this->record->details : [];
+        $details['mapping_defaults_applied'] = array_values(array_merge(
+            Arr::wrap($details['mapping_defaults_applied'] ?? []),
+            $defaultsApplied
+        ));
+
+        $this->record->update(['details' => $details]);
     }
 
     private function applyRelationshipTransform(PropertyRelationship $relationship, mixed $value): mixed
@@ -3147,6 +3231,7 @@ class HubspotService extends BaseService
         return match (trim($transform)) {
             'hubspot_datetime_to_millis',
             'hubspot_date_to_millis' => $this->convertDateValueToHubspotMillis($value),
+            'decimal' => is_numeric($value) ? (float) $value : $value,
             default => $value,
         };
     }
