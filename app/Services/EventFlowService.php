@@ -270,11 +270,14 @@ class EventFlowService
                 ?: ($relationship->property?->key ?: $relationship->property?->name);
             $targetKey = $relationship->relatedProperty?->key ?: $relationship->relatedProperty?->name;
 
-            if (! $sourceKey || ! $targetKey) {
+            $isConstant = ($relationship->meta['mode'] ?? null) === 'constant';
+            if ((! $sourceKey && ! $isConstant) || ! $targetKey) {
                 continue;
             }
 
-            $value = data_get($data, $sourceKey);
+            $value = $isConstant
+                ? ($relationship->meta['value'] ?? null)
+                : data_get($data, $sourceKey);
             if ($value === null) {
                 continue;
             }

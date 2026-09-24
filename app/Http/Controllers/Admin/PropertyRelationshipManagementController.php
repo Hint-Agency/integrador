@@ -23,7 +23,7 @@ class PropertyRelationshipManagementController extends Controller
 
         PropertyRelationship::query()->create([
             'event_id' => $event->id,
-            'property_id' => $data['property_id'],
+            'property_id' => $data['property_id'] ?? null,
             'related_property_id' => $data['related_property_id'],
             'mapping_key' => $data['mapping_key'] ?? null,
             'active' => (bool) ($data['active'] ?? true),
@@ -43,7 +43,7 @@ class PropertyRelationshipManagementController extends Controller
         $this->assertPropertyScope($event, $data['property_id'], $data['related_property_id']);
 
         $relationship->update([
-            'property_id' => $data['property_id'],
+            'property_id' => $data['property_id'] ?? null,
             'related_property_id' => $data['related_property_id'],
             'mapping_key' => $data['mapping_key'] ?? null,
             'active' => (bool) ($data['active'] ?? false),
@@ -68,24 +68,37 @@ class PropertyRelationshipManagementController extends Controller
 
     private function validatePayload(Request $request): array
     {
-        return $request->validate([
-            'property_id' => ['required', 'integer', 'exists:properties,id'],
+        $data = $request->validate([
+            'property_id' => ['required_unless:meta.mode,constant', 'nullable', 'integer', 'exists:properties,id'],
             'related_property_id' => ['required', 'integer', 'exists:properties,id'],
             'mapping_key' => ['nullable', 'string', 'max:255'],
             'active' => ['sometimes', 'boolean'],
             'meta' => ['sometimes', 'array'],
+            'meta.mode' => ['sometimes', 'in:property,constant'],
+            'meta.value' => ['required_if:meta.mode,constant', function ($attribute, $value, $fail) {
+                if (! is_scalar($value)) {
+                    $fail('El valor fijo debe ser texto, un numero o un booleano.');
+                }
+            }],
         ]);
+
+        if (($data['meta']['mode'] ?? null) === 'constant') {
+            $data['property_id'] = null;
+            $data['mapping_key'] = null;
+        }
+
+        return $data;
     }
 
-    private function assertPropertyScope(Event $event, int $sourcePropertyId, int $targetPropertyId): void
+    private function assertPropertyScope(Event $event, ?int $sourcePropertyId, int $targetPropertyId): void
     {
-        $source = Property::query()->findOrFail($sourcePropertyId);
+        $source = $sourcePropertyId === null ? null : Property::query()->findOrFail($sourcePropertyId);
         $target = Property::query()->findOrFail($targetPropertyId);
         $mappingContext = $this->eventMappingContextResolver->resolve($event);
         $sourcePlatformIds = $mappingContext['source_platform_ids'] ?: [$event->platform_id];
         $targetPlatformId = $mappingContext['target_platform_id'] ?? $event->platform_id;
 
-        if (! in_array((int) $source->platform_id, array_map('intval', $sourcePlatformIds), true)) {
+        if ($source && ! in_array((int) $source->platform_id, array_map('intval', $sourcePlatformIds), true)) {
             abort(422, 'La propiedad origen no pertenece al contexto de entrada del mapping.');
         }
 

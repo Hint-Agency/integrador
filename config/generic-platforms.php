@@ -13,7 +13,10 @@ $csv = static function (?string $value): array {
 return [
     'policy' => [
         'allowed_domains' => $csv(env('GENERIC_ALLOWED_DOMAINS')),
-        'sensitive_headers' => $csv(env('GENERIC_SENSITIVE_HEADERS', 'authorization,proxy-authorization,cookie,set-cookie')),
+        'sensitive_headers' => $csv(env(
+            'GENERIC_SENSITIVE_HEADERS',
+            'authorization,proxy-authorization,cookie,set-cookie,x-api-key,x-api_key,api-key'
+        )),
         'timeout_seconds' => (int) env('GENERIC_TIMEOUT_SECONDS', 30),
         'retry' => [
             'max_attempts' => (int) env('GENERIC_RETRY_MAX_ATTEMPTS', 3),

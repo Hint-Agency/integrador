@@ -185,6 +185,41 @@ class HubspotAspelProductSyncTest extends TestCase
         );
     }
 
+    public function test_it_applies_constant_destination_prices_on_product_update_and_create(): void
+    {
+        config()->set('hubspot.access_token', 'token_123');
+        config()->set('hubspot.base_url', 'https://api.hubapi.test');
+        Http::fake(function (Request $request) {
+            if (str_ends_with($request->url(), '/search')) {
+                return Http::response(['results' => [['id' => '901']]], 200);
+            }
+
+            return Http::response(['id' => '901', 'properties' => $request->data()['properties'] ?? []], 200);
+        });
+        [$platform, $event, $record] = $this->prepareAspelHubspotProductSyncContext();
+        $target = Property::query()->create([
+            'platform_id' => $platform->id, 'name' => 'Price', 'key' => 'price',
+            'type' => 'decimal', 'active' => true,
+        ]);
+        PropertyRelationship::query()->create([
+            'event_id' => $event->meta['mapping_event_id'], 'property_id' => null,
+            'related_property_id' => $target->id, 'active' => true,
+            'meta' => ['mode' => 'constant', 'value' => 0, 'transform' => 'decimal'],
+        ]);
+        $service = app()->make(HubspotService::class, [
+            'platform' => $platform, 'event' => $event, 'record' => $record,
+        ]);
+        $payload = $this->buildAspelProductPayload();
+        $payload['aspel_detail']['price'] = 999;
+        $this->assertTrue($service->updateAspelProductInHubspot($payload)['success']);
+        $this->assertTrue($service->createAspelProductInHubspot($payload)['success']);
+        Http::assertSentCount(3);
+        Http::assertSent(fn (Request $request) => $request->method() === 'PATCH'
+            && ($request->data()['properties']['price'] ?? null) === 0.0);
+        Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/products')
+            && ($request->data()['properties']['price'] ?? null) === 0.0);
+    }
+
     public function test_it_creates_hubspot_product_from_explicit_create_fallback(): void
     {
         config()->set('hubspot.access_token', 'token_123');

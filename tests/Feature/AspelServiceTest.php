@@ -924,6 +924,39 @@ class AspelServiceTest extends TestCase
         $this->assertSame(['001', '002'], $response['data']['matched_warehouses']);
     }
 
+    public function test_warehouse_query_uses_customer_and_warehouse_and_preserves_zero_price(): void
+    {
+        [$service, $event] = $this->makeAspelOperationService('syncLineItemWarehouseInventory', 'GET', '/api/almacenes/{cveArticulo}');
+        $event->update(['meta' => ['require_customer_context' => true]]);
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(static function ($platform, $endpoint, $method, $headers, $query, $body): bool {
+            return $endpoint === 'https://api.example.com/api/almacenes/10020004'
+                && $method === 'GET' && $query === ['claveCliente' => '42', 'cveAlmacen' => '4'] && $body === [];
+        })->andReturn(['success' => true, 'data' => [[
+            'cveArt' => '10020004', 'cveAlm' => '4', 'exist' => 10,
+            'listaPrecio' => 1, 'origenLista' => 'default', 'precio' => 0,
+            'incluyeImpuestos' => false, 'stockMax' => 15, 'stockMin' => 8,
+        ]]]);
+        $response = $service->syncLineItemWarehouseInventory(['clave' => '10020004', 'almacen_id' => '4', 'claveCliente' => '42'], $adapter);
+        $this->assertTrue($response['success']);
+        $this->assertSame(0, $response['data']['precio']);
+        $this->assertFalse($response['data']['incluyeImpuestos']);
+        $this->assertSame('42', $response['data']['claveCliente']);
+        $this->assertSame(10.0, $response['data']['existencias']);
+    }
+
+    public function test_customer_warehouse_query_blocks_missing_customer_and_multiple_warehouses(): void
+    {
+        [$service, $event] = $this->makeAspelOperationService('syncLineItemWarehouseInventory', 'GET', '/api/almacenes/{cveArticulo}');
+        $event->update(['meta' => ['require_customer_context' => true]]);
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldNotReceive('send');
+        $response = $service->syncLineItemWarehouseInventory(['clave' => '10020004', 'almacen_id' => '4'], $adapter);
+        $this->assertSame('missing_customer_clave', $response['data']['warning_reason']);
+        $response = $service->syncLineItemWarehouseInventory(['clave' => '10020004', 'almacen_id' => '4,5', 'claveCliente' => '42'], $adapter);
+        $this->assertSame('ambiguous_pricing_warehouses', $response['data']['warning_reason']);
+    }
+
     public function test_it_skips_create_fallback_when_previous_event_updated_the_contact(): void
     {
         [$service] = $this->makeAspelOperationService(
@@ -1181,6 +1214,8 @@ class AspelServiceTest extends TestCase
             'claveCliente' => '39489',
             'correoVendedor' => ' VENDEDOR@EMPRESA.COM ',
             'fechaEntrega' => '2026-09-10T09:00:00-06:00',
+            'direccionEnvio' => ['nombre' => 'Cliente', 'calle' => 'Calle real', 'numeroInterior' => '4',
+                'numeroExterior' => '100', 'poblacion' => 'Merida', 'referencia' => 'Porton azul'],
             'formaEnvio' => 'a',
             'formaPagoSat' => '03',
             'metodoDePago' => 'CHEQUE',
@@ -1218,7 +1253,7 @@ class AspelServiceTest extends TestCase
                 'cveAlmacen' => 5,
                 'listaPrecio' => 7,
                 'precioUnitario' => 5637,
-                'iva' => 8,
+                'iva' => -1,
                 'descuento' => ['porcentaje' => 5, 'importe' => 100],
             ]],
         ], $adapter);

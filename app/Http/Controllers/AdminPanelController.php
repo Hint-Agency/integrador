@@ -321,6 +321,7 @@ class AdminPanelController extends Controller
             'execute',
             'executeEndpointCall',
             'loadEvent',
+            'normalizeQuotePayload',
             'resolveAllowlistDomains',
             'resolveAuthConfig',
             'resolveAuthMode',

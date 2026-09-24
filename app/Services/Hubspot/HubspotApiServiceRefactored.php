@@ -583,7 +583,13 @@ class HubspotApiServiceRefactored
         ]);
     }
 
-    public function getObjectAssociations(string $fromObjectType, string $fromObjectId, string $toObjectType): array
+    public function getAssociationTypes(string $fromObjectType, string $toObjectType): array
+    {
+        return $this->request('GET', sprintf('/crm/v3/associations/%s/%s/types',
+            $this->normalizeObjectType($fromObjectType), $this->normalizeObjectType($toObjectType)));
+    }
+
+    public function getObjectAssociations(string $fromObjectType, string $fromObjectId, string $toObjectType, ?string $after = null): array
     {
         if (trim($fromObjectId) === '') {
             return $this->errorResponse(0, 'HubSpot object id is required to fetch associations.');
@@ -596,7 +602,9 @@ class HubspotApiServiceRefactored
                 $this->normalizeObjectType($fromObjectType),
                 $fromObjectId,
                 $this->normalizeObjectType($toObjectType)
-            )
+            ),
+            [],
+            $after === null ? [] : ['after' => $after]
         );
     }
 

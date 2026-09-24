@@ -75,6 +75,9 @@ trait ProcessesEventJob
 
         $result = $this->invokeService($service, $methodName, $data, $event, $record);
         $outputPayload = $this->resolveOutputPayload($result, $data);
+        if (is_array(Arr::get($result, 'data.hubspot_note'))) {
+            $this->mergeRecordDetails($record, ['hubspot_note' => Arr::get($result, 'data.hubspot_note')]);
+        }
 
         if (! Arr::get($result, 'success', false)) {
             $message = Arr::get($result, 'message', 'Event processing failed.');
@@ -187,6 +190,10 @@ trait ProcessesEventJob
                 'attempted' => false,
                 'reason' => 'platform_not_hubspot',
             ];
+        }
+
+        if (($event->meta['object_type'] ?? null) === 'quotes') {
+            return ['attempted' => false, 'reason' => 'quote_failure_note_handled_by_service'];
         }
 
         $contactId = $this->resolveHubspotContactId($data);

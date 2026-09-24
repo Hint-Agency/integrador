@@ -714,6 +714,63 @@ class AdminPanelPagesTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_create_constant_mapping_without_source_and_reject_invalid_values(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $actor = User::factory()->create();
+        $this->grantPermission($actor, 'events.manage');
+        $platform = Platform::query()->create([
+            'name' => 'HubSpot', 'slug' => 'hubspot', 'type' => 'hubspot', 'active' => true,
+        ]);
+        $event = Event::query()->create([
+            'platform_id' => $platform->id, 'name' => 'Product mapping',
+            'event_type_id' => 'product.updated', 'type' => 'webhook', 'active' => true,
+        ]);
+        $target = Property::query()->create([
+            'platform_id' => $platform->id, 'name' => 'Price', 'key' => 'price',
+            'type' => 'decimal', 'active' => true,
+        ]);
+        $url = "/admin/events/{$event->id}/relationships";
+
+        foreach ([0, false, 'Fixed text'] as $value) {
+            $this->actingAs($actor)->post($url, [
+                'related_property_id' => $target->id,
+                'active' => true,
+                'meta' => ['mode' => 'constant', 'value' => $value],
+            ])->assertSessionHasNoErrors()->assertRedirect($url);
+        }
+        $this->assertDatabaseHas('property_relationships', [
+            'event_id' => $event->id, 'property_id' => null, 'related_property_id' => $target->id,
+        ]);
+        $relationship = $event->propertyRelationships()->firstOrFail();
+        $this->actingAs($actor)->put("{$url}/{$relationship->id}", [
+            'related_property_id' => $target->id, 'active' => true,
+            'meta' => ['mode' => 'constant', 'value' => 12.5],
+        ])->assertSessionHasNoErrors()->assertRedirect($url);
+        $this->assertSame(12.5, $relationship->fresh()->meta['value']);
+        $otherPlatform = Platform::query()->create([
+            'name' => 'Other', 'slug' => 'other', 'type' => 'generic', 'active' => true,
+        ]);
+        $otherTarget = Property::query()->create([
+            'platform_id' => $otherPlatform->id, 'name' => 'Other price', 'key' => 'price',
+            'type' => 'decimal', 'active' => true,
+        ]);
+        $this->actingAs($actor)->postJson($url, [
+            'related_property_id' => $otherTarget->id,
+            'meta' => ['mode' => 'constant', 'value' => 0],
+        ])->assertUnprocessable();
+        $this->actingAs($actor)->postJson($url, [
+            'related_property_id' => $target->id,
+            'meta' => ['mode' => 'constant', 'value' => ['invalid']],
+        ])->assertUnprocessable()->assertJsonValidationErrors('meta.value');
+        $this->actingAs($actor)->postJson($url, [
+            'related_property_id' => $target->id, 'meta' => ['mode' => 'constant'],
+        ])->assertUnprocessable()->assertJsonValidationErrors('meta.value');
+        $this->actingAs($actor)->postJson($url, [
+            'related_property_id' => $target->id,
+        ])->assertUnprocessable()->assertJsonValidationErrors('property_id');
+    }
+
     public function test_admin_event_relationship_create_endpoint_creates_mapping(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);

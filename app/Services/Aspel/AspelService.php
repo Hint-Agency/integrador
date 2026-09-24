@@ -212,10 +212,27 @@ class AspelService extends GenericPlatformService
             ];
         }
 
+        $customerClave = $this->resolveScalarValue([Arr::get($payload, 'claveCliente')]);
+        if (($this->event->meta['require_customer_context'] ?? false)
+            && ($customerClave === null || count($selectedWarehouses) !== 1)) {
+            return [
+                'success' => true, 'status' => 'warning',
+                'message' => 'Customer pricing requires a customer key and one selected warehouse.',
+                'data' => ['warning_reason' => $customerClave === null ? 'missing_customer_clave' : 'ambiguous_pricing_warehouses', 'output_payload' => []],
+            ];
+        }
+        $query = [];
+        if ($customerClave !== null) {
+            $query['claveCliente'] = $customerClave;
+        }
+        if (count($selectedWarehouses) === 1) {
+            $query['cveAlmacen'] = $selectedWarehouses[0];
+        }
+
         $response = $this->sendRequest(
             $this->resolveWarehouseInventoryEndpoint($articleKey),
             'GET',
-            [],
+            ['query' => $query],
             $httpAdapter
         );
 
@@ -244,11 +261,28 @@ class AspelService extends GenericPlatformService
         ));
 
         $aggregated = $this->aggregateWarehouseInventory($filteredRecords);
+        if ($filteredRecords === []) {
+            return [
+                'success' => true, 'status' => 'warning',
+                'message' => 'ASPEL did not return the selected warehouse.',
+                'data' => ['warning_reason' => 'warehouse_not_found', 'warehouse_response' => $response, 'output_payload' => []],
+            ];
+        }
+        $pricing = [];
+        if (count($filteredRecords) === 1) {
+            foreach (['precio', 'listaPrecio', 'origenLista', 'incluyeImpuestos'] as $key) {
+                if (array_key_exists($key, $filteredRecords[0])) {
+                    $pricing[$key] = $filteredRecords[0][$key];
+                }
+            }
+        }
 
         return [
             'success' => true,
             'message' => 'ASPEL warehouse inventory synchronized for line item.',
             'data' => [
+                ...$pricing,
+                'claveCliente' => $customerClave,
                 'cveArticulo' => $articleKey,
                 'selected_warehouses' => $selectedWarehouses,
                 'matched_warehouses' => array_values(array_filter(array_map(
@@ -304,7 +338,7 @@ class AspelService extends GenericPlatformService
         return $this->sendRequest(
             $this->replaceFirstEndpointPlaceholder($this->resolveEndpoint($this->event), $sku),
             'GET',
-            [],
+            ['query' => (array) ($payload['query'] ?? [])],
             $httpAdapter
         );
     }
@@ -1569,7 +1603,7 @@ class AspelService extends GenericPlatformService
     /**
      * @return array{valid:bool,payload:array<string,mixed>,errors:array<string,list<string>>}
      */
-    private function normalizeQuotePayload(array $payload): array
+    public function normalizeQuotePayload(array $payload): array
     {
         $errors = [];
         $quote = [];
@@ -1583,12 +1617,21 @@ class AspelService extends GenericPlatformService
             }
 
             $quote[$field] = $field === 'correoVendedor' ? Str::lower($value) : $value;
+            $limit = ['hubspotDealId' => 100, 'hubspotQuoteId' => 100, 'claveCliente' => 10, 'correoVendedor' => 60][$field];
+            if (mb_strlen($value) > $limit) {
+                $errors[$field][] = 'Maximum length is '.$limit.'.';
+            }
+        }
+        if (isset($quote['correoVendedor']) && ! filter_var($quote['correoVendedor'], FILTER_VALIDATE_EMAIL)) {
+            $errors['correoVendedor'][] = 'A valid seller email is required.';
         }
 
         foreach (['pedidoCliente', 'condicion', 'formaPagoSat', 'usoCfdi', 'regimenFiscal', 'observaciones'] as $field) {
             $value = Arr::get($payload, $field);
             if ($value !== null && is_scalar($value)) {
                 $quote[$field] = trim((string) $value);
+            } elseif ($value !== null) {
+                $errors[$field][] = 'Must be a scalar value.';
             }
         }
 
@@ -1612,6 +1655,9 @@ class AspelService extends GenericPlatformService
         foreach (['descuentoGeneral', 'direccionEnvio', 'camposLibres'] as $field) {
             $value = Arr::get($payload, $field);
             if ($value !== null) {
+                if ($field === 'camposLibres' && $value instanceof \stdClass) {
+                    $value = get_object_vars($value);
+                }
                 if (! is_array($value)) {
                     $errors[$field][] = 'The '.$field.' field must be an object.';
                 } else {
@@ -1622,6 +1668,38 @@ class AspelService extends GenericPlatformService
 
         if (isset($quote['descuentoGeneral'])) {
             $this->validateDiscount($quote['descuentoGeneral'], 'descuentoGeneral', $errors);
+        }
+        foreach (['nombre' => 254, 'calle' => 80, 'numeroInterior' => 15, 'numeroExterior' => 15, 'poblacion' => 50, 'referencia' => 255] as $field => $limit) {
+            $value = Arr::get($quote, 'direccionEnvio.'.$field);
+            if (! is_scalar($value) || trim((string) $value) === '' || mb_strlen((string) $value) > $limit) {
+                $errors['direccionEnvio.'.$field][] = 'Required, non-empty text with maximum length '.$limit.'.';
+            } else {
+                $quote['direccionEnvio'][$field] = trim((string) $value);
+            }
+        }
+        foreach ([
+            'pedidoCliente' => 20, 'condicion' => 25, 'formaPagoSat' => 5, 'usoCfdi' => 5, 'regimenFiscal' => 4, 'observaciones' => 255,
+            'direccionEnvio.cruzamiento1' => 40, 'direccionEnvio.cruzamiento2' => 40,
+            'direccionEnvio.colonia' => 50, 'direccionEnvio.estado' => 50, 'direccionEnvio.pais' => 50,
+            'direccionEnvio.municipio' => 50, 'direccionEnvio.codigoPostal' => 5, 'direccionEnvio.clavePaisSat' => 3,
+            'camposLibres.tipoVenta' => 1, 'camposLibres.paciente' => 250, 'camposLibres.otro' => 150,
+        ] as $field => $limit) {
+            $value = Arr::get($quote, $field);
+            if ($value !== null) {
+                if (! is_scalar($value) || mb_strlen((string) $value) > $limit) {
+                    $errors[$field][] = 'Maximum text length is '.$limit.'.';
+                } else {
+                    Arr::set($quote, $field, trim((string) $value));
+                }
+            }
+        }
+        if (! isset($quote['camposLibres'])) {
+            $quote['camposLibres'] = [];
+        }
+        if ($quote['camposLibres'] === []) {
+            $quote['camposLibres'] = (object) [];
+        } elseif (array_is_list($quote['camposLibres'])) {
+            $errors['camposLibres'][] = 'Must be a JSON object, not a list.';
         }
 
         $partidas = Arr::get($payload, 'partidas');
@@ -1651,6 +1729,18 @@ class AspelService extends GenericPlatformService
             'cveUsuario',
             'nomUsuario',
         ]);
+        if (isset($quote['descuentoGeneral']['importe']) && is_numeric($quote['descuentoGeneral']['importe'])) {
+            $base = 0.0;
+            foreach ($quote['partidas'] ?? [] as $line) {
+                $lineBase = ($line['cantidad'] ?? 0) * ($line['precioUnitario'] ?? 0);
+                $discount = $line['descuento'] ?? [];
+                $base += $lineBase - (isset($discount['importe']) && is_numeric($discount['importe']) ? (float) $discount['importe'] :
+                    $lineBase * (is_numeric($discount['porcentaje'] ?? null) ? (float) $discount['porcentaje'] / 100 : 0));
+            }
+            if ((float) $quote['descuentoGeneral']['importe'] > $base) {
+                $errors['descuentoGeneral.importe'][] = 'Discount exceeds quote base.';
+            }
+        }
 
         return [
             'valid' => $errors === [],
@@ -1667,18 +1757,37 @@ class AspelService extends GenericPlatformService
         foreach (['hubspotLineItemId', 'cveArt'] as $field) {
             $value = $this->resolveScalarValue([Arr::get($partida, $field)]);
             if ($value === null) {
-                $errors[$path.'.'.$field][] = 'The '.$field.' field is required.';
+                if ($field === 'cveArt') {
+                    $errors[$path.'.'.$field][] = 'The '.$field.' field is required.';
+                }
             } else {
                 $normalized[$field] = $value;
+                if (mb_strlen($value) > ($field === 'cveArt' ? 16 : 30)) {
+                    $errors[$path.'.'.$field][] = 'Maximum length exceeded.';
+                }
             }
         }
 
         foreach (['cantidad', 'cveAlmacen', 'listaPrecio', 'precioUnitario', 'iva'] as $field) {
             $value = Arr::get($partida, $field);
+            if ($field === 'iva' && ! Arr::has($partida, $field)) {
+                continue;
+            }
             if (! is_numeric($value)) {
                 $errors[$path.'.'.$field][] = 'The '.$field.' field must be numeric.';
 
                 continue;
+            }
+            if (! is_finite((float) $value)) {
+                $errors[$path.'.'.$field][] = 'A finite number is required.';
+                continue;
+            }
+            if (in_array($field, ['cveAlmacen', 'listaPrecio'], true)
+                && ((float) $value <= 0 || floor((float) $value) !== (float) $value)) {
+                $errors[$path.'.'.$field][] = 'A positive integer is required.';
+            }
+            if (in_array($field, ['precioUnitario', 'iva'], true) && (float) $value < 0) {
+                $errors[$path.'.'.$field][] = 'Must be non-negative.';
             }
 
             $normalized[$field] = match ($field) {
@@ -1692,16 +1801,17 @@ class AspelService extends GenericPlatformService
             $errors[$path.'.cantidad'][] = 'The cantidad field must be greater than zero.';
         }
 
-        if (isset($normalized['iva']) && ! in_array($normalized['iva'], [0.0, 16.0], true)) {
-            $errors[$path.'.iva'][] = 'The iva field must be 0 or 16.';
-        }
-
         if (Arr::has($partida, 'descuento')) {
             $discount = Arr::get($partida, 'descuento');
             if (! is_array($discount)) {
                 $errors[$path.'.descuento'][] = 'The descuento field must be an object.';
             } else {
                 $this->validateDiscount($discount, $path.'.descuento', $errors);
+                if (isset($discount['importe'], $normalized['cantidad'], $normalized['precioUnitario'])
+                    && is_numeric($discount['importe'])
+                    && (float) $discount['importe'] > $normalized['cantidad'] * $normalized['precioUnitario']) {
+                    $errors[$path.'.descuento.importe'][] = 'Discount exceeds line item base.';
+                }
                 $normalized['descuento'] = $discount;
             }
         }
@@ -1721,8 +1831,11 @@ class AspelService extends GenericPlatformService
         }
 
         $key = $hasPercentage ? 'porcentaje' : 'importe';
-        if (! is_numeric($discount[$key]) || (float) $discount[$key] < 0) {
+        if (! is_numeric($discount[$key]) || ! is_finite((float) $discount[$key]) || (float) $discount[$key] < 0) {
             $errors[$path.'.'.$key][] = 'The '.$key.' field must be a non-negative number.';
+        }
+        if ($hasPercentage && is_numeric($discount[$key]) && (float) $discount[$key] > 100) {
+            $errors[$path.'.'.$key][] = 'Percentage cannot exceed 100.';
         }
     }
 

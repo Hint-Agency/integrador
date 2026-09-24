@@ -65,6 +65,8 @@ class EndpointExecutionJobResponsePropagationTest extends TestCase
             'method' => 'POST',
             'base_url' => 'https://api.example.com',
             'path' => '/contacts',
+            'auth_mode' => 'bearer_api_key',
+            'auth_config_json' => ['header_name' => 'X-API-Key', 'header_prefix' => ''],
             'active' => true,
         ]);
 
@@ -114,6 +116,8 @@ class EndpointExecutionJobResponsePropagationTest extends TestCase
 
         $job = new EndpointExecutionJob($event->fresh('platform', 'to_event'), $record, $payload);
         $job->handle($eventProcessingService, $httpAdapter, $eventLoggingService, $rateLimitService);
+
+        $this->assertSame('[redacted]', data_get($record->fresh()->details, 'request.headers.X-API-Key'));
 
         Queue::assertPushed(ProcessNextEventJob::class, function (ProcessNextEventJob $job) use ($event, $record): bool {
             return $job->event->id === $event->id

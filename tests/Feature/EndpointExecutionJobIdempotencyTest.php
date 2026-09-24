@@ -147,6 +147,8 @@ class EndpointExecutionJobIdempotencyTest extends TestCase
             'hubspotQuoteId' => '456',
             'claveCliente' => '39489',
             'correoVendedor' => 'seller@example.com',
+            'direccionEnvio' => ['nombre' => 'Cliente', 'calle' => 'Calle real', 'numeroInterior' => '2',
+                'numeroExterior' => '100', 'poblacion' => 'Merida', 'referencia' => 'Porton azul'],
             'partidas' => [[
                 'hubspotLineItemId' => '789',
                 'cveArt' => '10040003',
@@ -242,6 +244,8 @@ class EndpointExecutionJobIdempotencyTest extends TestCase
             'hubspotLineItemId' => '789',
             'claveCliente' => '39489',
             'correoVendedor' => 'seller@example.com',
+            'direccionEnvio' => ['nombre' => 'Cliente', 'calle' => 'Calle real', 'numeroInterior' => '2',
+                'numeroExterior' => '100', 'poblacion' => 'Merida', 'referencia' => 'Porton azul'],
             'partidas' => [[
                 'hubspotLineItemId' => '789',
                 'cveArt' => '10040003',

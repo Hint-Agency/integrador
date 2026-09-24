@@ -209,7 +209,7 @@ class EndpointExecutionJob implements ShouldQueue
 
     private function sanitizeHeaders(array $headers): array
     {
-        $sensitive = config('generic-platforms.policy.sensitive_headers', []);
+        $sensitive = array_map('strtolower', config('generic-platforms.policy.sensitive_headers', []));
         $sanitized = [];
 
         foreach ($headers as $key => $value) {
@@ -293,6 +293,29 @@ class EndpointExecutionJob implements ShouldQueue
                 'attempted' => false,
                 'reason' => 'source_platform_not_hubspot',
             ];
+        }
+
+        if ($this->event->method_name === 'createQuote') {
+            $this->applyHubspotRuntimeConfig($sourceEvent);
+            $dealId = (string) ($this->payload['hubspotDealId'] ?? '');
+            $quoteId = (string) ($this->payload['hubspotQuoteId'] ?? '');
+            $statusUpdate = null;
+            if (! ($response['retryable'] ?? false) && $quoteId !== '') {
+                $statusUpdate = $hubspotApiService->updateObject('quotes', $quoteId, [
+                    'sync_status_aspel' => 'error',
+                    'last_error_aspel' => ($response['error']['code'] ?? '').': '.($response['error']['message'] ?? 'Quote failed.'),
+                    'last_sync_aspel' => now()->getTimestampMs(),
+                ]);
+            }
+            if ($dealId === '') {
+                return ['attempted' => false, 'reason' => 'hubspot_deal_id_missing', 'status_update' => $statusUpdate];
+            }
+            $note = $hubspotApiService->addNoteToObject('deals', $dealId,
+                '[Integrador ASPEL] Fallo la cotizacion '.$quoteId."\n".json_encode($this->sanitizeResponse($response), JSON_UNESCAPED_UNICODE)
+                .(($response['retryable'] ?? false) ? '\nReintentar con los mismos IDs.' : '\nCorregir los datos y generar una nueva cotizacion.'));
+            return ['attempted' => true, 'success' => (bool) ($note['success'] ?? false),
+                'object_type' => 'deals', 'deal_id' => $dealId, 'note_id' => Arr::get($note, 'data.id'),
+                'error' => $note['error'] ?? null, 'status_update' => $statusUpdate];
         }
 
         $contactId = $this->resolveHubspotContactId();

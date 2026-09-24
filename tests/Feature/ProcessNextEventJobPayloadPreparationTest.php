@@ -19,6 +19,76 @@ class ProcessNextEventJobPayloadPreparationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_warehouse_chaining_preserves_article_identity_and_blocks_failed_customer_resolution(): void
+    {
+        foreach ([true, false] as $success) {
+            $platform = Platform::query()->create([
+                'name' => 'HubSpot', 'slug' => 'warehouse-'.(int) $success, 'type' => 'hubspot', 'active' => true,
+            ]);
+            $next = Event::query()->create([
+                'platform_id' => $platform->id, 'name' => 'Warehouse', 'type' => 'node',
+                'event_type_id' => 'generic.external.call', 'method_name' => 'syncLineItemWarehouseInventory',
+                'meta' => ['require_customer_context' => true], 'active' => true,
+            ]);
+            $source = Event::query()->create([
+                'platform_id' => $platform->id, 'name' => 'Line item change', 'type' => 'webhook',
+                'event_type_id' => 'object.propertyChange', 'to_event_id' => $next->id,
+                'meta' => ['object_type' => 'line_items', 'required_source_properties' => ['clave', 'almacen_id']], 'active' => true,
+            ]);
+            $record = Record::query()->create([
+                'event_id' => $source->id, 'event_type' => 'object.propertyChange', 'status' => 'success', 'payload' => [],
+            ]);
+            $api = Mockery::mock(HubspotApiServiceRefactored::class);
+            $api->shouldReceive('getObject')->once()->with('line_items', 'LI1', ['clave', 'almacen_id'])
+                ->andReturn(['success' => true, 'data' => ['properties' => ['clave' => '10020004', 'almacen_id' => '4']]]);
+            $resolver = Mockery::mock(\App\Services\Hubspot\HubspotLineItemCustomerContextService::class);
+            $resolver->shouldReceive('resolve')->once()->with($api, 'LI1', ['require_customer_context' => true])->andReturn(
+                $success ? ['success' => true, 'context' => ['claveCliente' => '42', 'hubspot_deal_id' => 'D1', 'hubspot_customer_contact_id' => 'C1']]
+                : ['success' => false, 'status' => 'warning', 'reason' => 'missing_customer_clave']
+            );
+            $this->app->instance(\App\Services\Hubspot\HubspotLineItemCustomerContextService::class, $resolver);
+            $processing = Mockery::mock(EventProcessingService::class);
+            if ($success) {
+                $processing->shouldReceive('dispatchEvent')->once()->withArgs(static fn ($event, $jobRecord, $payload): bool =>
+                    $payload['hubspot_object_id'] === 'LI1' && $payload['clave'] === '10020004' && $payload['claveCliente'] === '42');
+            } else {
+                $processing->shouldNotReceive('dispatchEvent');
+            }
+            (new ProcessNextEventJob($source, $record, ['objectId' => 'LI1', 'propertyName' => 'almacen_id']))
+                ->handle($processing, app(EventFlowService::class), $api);
+            $record->refresh();
+            $this->assertSame($success ? 'success' : 'warning', $record->status);
+            $this->assertSame($success, data_get($record->details, 'warehouse_customer_context.success'));
+        }
+    }
+
+    public function test_general_mapping_applies_constants_without_source_and_preserves_zero_and_false(): void
+    {
+        $platform = Platform::query()->create([
+            'name' => 'Generic', 'slug' => 'generic', 'type' => 'generic', 'active' => true,
+        ]);
+        $event = Event::query()->create([
+            'platform_id' => $platform->id, 'name' => 'Constants',
+            'event_type_id' => 'generic.external.call', 'type' => 'webhook', 'active' => true,
+        ]);
+        foreach ([['price', 'decimal', 0], ['enabled', 'boolean', false], ['label', 'string', 'Fixed']] as [$key, $type, $value]) {
+            $target = Property::query()->create([
+                'platform_id' => $platform->id, 'name' => $key, 'key' => $key,
+                'type' => $type, 'active' => true,
+            ]);
+            PropertyRelationship::query()->create([
+                'event_id' => $event->id, 'property_id' => null,
+                'related_property_id' => $target->id, 'active' => true,
+                'meta' => ['mode' => 'constant', 'value' => $value],
+            ]);
+        }
+
+        $result = app(EventFlowService::class)->transformPayloadForEvent($event, ['price' => 999]);
+        $this->assertSame(0.0, $result['price']);
+        $this->assertFalse($result['enabled']);
+        $this->assertSame('Fixed', $result['label']);
+    }
+
     public function test_it_applies_property_relationship_mapping_before_dispatching_next_event(): void
     {
         $sourcePlatform = Platform::query()->create([

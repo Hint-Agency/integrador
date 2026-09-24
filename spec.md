@@ -589,4 +589,15 @@ El sistema DEBE aplicar controles de rate limit de forma explicita para evitar b
 
 ---
 
+## Cotizaciones ASPEL SAE
+
+- Inicio por `deal.propertyChange`, propiedad `dealstage`, valores `1316578321`, `1160755464`, `1316741897`, `1316738978`.
+- Flujo asincrono: cambio de etapa -> `prepareAspelQuote` -> `createQuote` -> `syncQuoteExecutionResponse`.
+- Resolver un unico contacto principal por categoria/tipo configurables; usar sus datos de cliente y fiscales. Resolver una unica cotizacion candidata y sus propias partidas; no elegir arbitrariamente entre varias.
+- Mappings por evento, claves `contact.properties.*`, `quote.properties.*`, `line_item.properties.*` y `contact_name`; meta.scope `header` o `line_item`.
+- Reconsultar precios por cliente, articulo y almacen antes de emitir. Bloquear diferencias con lista esperada/partida o listas con impuestos incluidos; no corregir precios automaticamente.
+- Direccion obligatoria sin defaults ficticios; IVA y hubspotLineItemId opcionales. Serializar camposLibres vacio como objeto JSON.
+- Fallos de negocio: nota en negocio, estado error en cotizacion, corregir y crear nueva cotizacion. Fallos transitorios: conservar IDs para reintentos idempotentes.
+- Write-back: `aspel_cve_doc`, `aspel_folio`, `aspel_serie`, `sync_status_aspel`, `last_sync_aspel`, `last_error_aspel`. Si falla despues de emitir, reintentar write-back sin crear otro documento.
+
 Fin del Documento.

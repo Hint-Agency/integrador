@@ -15,6 +15,9 @@ const props = defineProps({
 const editingRelationshipId = ref(null);
 
 const blankForm = () => ({
+    mode: 'property',
+    constant_type: 'number',
+    constant_value: '0',
     property_id: '',
     related_property_id: '',
     mapping_key: '',
@@ -46,7 +49,10 @@ const parseMeta = () => {
             return {};
         }
 
-        return JSON.parse(form.meta_text);
+        const parsed = JSON.parse(form.meta_text);
+        return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed
+            : null;
     } catch (error) {
         return null;
     }
@@ -61,6 +67,11 @@ const startCreate = () => {
 
 const startEdit = (relationship) => {
     editingRelationshipId.value = relationship.id;
+    form.mode = relationship.meta?.mode === 'constant' ? 'constant' : 'property';
+    form.constant_type = typeof relationship.meta?.value === 'boolean'
+        ? 'boolean'
+        : typeof relationship.meta?.value === 'number' ? 'number' : 'string';
+    form.constant_value = String(relationship.meta?.value ?? '');
     form.property_id = relationship.property_id ?? '';
     form.related_property_id = relationship.related_property_id ?? '';
     form.mapping_key = relationship.mapping_key ?? '';
@@ -80,14 +91,32 @@ const removeRelationship = (relationshipId) => {
 const submit = () => {
     const meta = parseMeta();
     if (meta === null) {
-        alert('`meta` debe ser JSON válido.');
+        alert('`meta` debe ser un objeto JSON válido.');
         return;
     }
 
+    if (form.mode === 'constant') {
+        let value = form.constant_value;
+        if (form.constant_type === 'number') {
+            if (value.trim() === '' || !Number.isFinite(Number(value))) {
+                form.setError('constant_value', 'Ingresa un número válido.');
+                return;
+            }
+            value = Number(value);
+        } else if (form.constant_type === 'boolean') {
+            value = value === 'true';
+        }
+        meta.mode = 'constant';
+        meta.value = value;
+    } else {
+        delete meta.mode;
+        delete meta.value;
+    }
+
     form.transform((data) => ({
-        property_id: Number(data.property_id),
+        property_id: data.mode === 'constant' ? null : Number(data.property_id),
         related_property_id: Number(data.related_property_id),
-        mapping_key: data.mapping_key || null,
+        mapping_key: data.mode === 'constant' ? null : data.mapping_key || null,
         active: !!data.active,
         meta,
     }));
@@ -174,14 +203,20 @@ const submit = () => {
                         <tbody>
                             <tr v-for="relationship in props.relationships" :key="relationship.id">
                                 <td>
-                                    <strong>{{ relationship.property?.name }}</strong>
-                                    <div class="cell-meta">{{ relationship.property?.key }} · {{ relationship.property?.type }}</div>
+                                    <template v-if="relationship.meta?.mode === 'constant'">
+                                        <strong>Valor fijo</strong>
+                                        <div class="cell-meta">{{ JSON.stringify(relationship.meta.value) }}</div>
+                                    </template>
+                                    <template v-else>
+                                        <strong>{{ relationship.property?.name }}</strong>
+                                        <div class="cell-meta">{{ relationship.property?.key }} · {{ relationship.property?.type }}</div>
+                                    </template>
                                 </td>
                                 <td>
                                     <strong>{{ relationship.related_property?.name }}</strong>
                                     <div class="cell-meta">{{ relationship.related_property?.key }} · {{ relationship.related_property?.type }}</div>
                                 </td>
-                                <td>{{ relationship.mapping_key || relationship.property?.key || 'auto' }}</td>
+                                <td>{{ relationship.meta?.mode === 'constant' ? 'Constante' : relationship.mapping_key || relationship.property?.key || 'auto' }}</td>
                                 <td>
                                     <span :class="relationship.active ? 'status active' : 'status inactive'">
                                         {{ relationship.active ? 'Activo' : 'Inactivo' }}
@@ -207,6 +242,14 @@ const submit = () => {
 
                 <form class="editor-form" @submit.prevent="submit">
                     <label class="field">
+                        <span>Tipo de mapeo</span>
+                        <select v-model="form.mode">
+                            <option value="property">Desde propiedad</option>
+                            <option value="constant">Valor fijo</option>
+                        </select>
+                    </label>
+
+                    <label v-if="form.mode === 'property'" class="field">
                         <span>Propiedad del payload entrante</span>
                         <select v-model="form.property_id" required>
                             <option value="" disabled>Selecciona propiedad entrante</option>
@@ -215,6 +258,27 @@ const submit = () => {
                             </option>
                         </select>
                     </label>
+
+                    <template v-if="form.mode === 'constant'">
+                        <label class="field">
+                            <span>Tipo del valor fijo</span>
+                            <select v-model="form.constant_type" @change="form.constant_value = form.constant_type === 'boolean' ? 'false' : form.constant_type === 'number' ? '0' : ''">
+                                <option value="number">Número</option>
+                                <option value="string">Texto</option>
+                                <option value="boolean">Booleano</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>Valor fijo</span>
+                            <select v-if="form.constant_type === 'boolean'" v-model="form.constant_value">
+                                <option value="false">false</option>
+                                <option value="true">true</option>
+                            </select>
+                            <input v-else v-model="form.constant_value" :type="form.constant_type === 'number' ? 'number' : 'text'" step="any" required>
+                            <small>Siempre se enviará este valor a la propiedad destino, aunque el payload contenga otro valor.</small>
+                            <small v-if="form.errors.constant_value || form.errors['meta.value']">{{ form.errors.constant_value || form.errors['meta.value'] }}</small>
+                        </label>
+                    </template>
 
                     <label class="field">
                         <span>Propiedad destino</span>
@@ -226,16 +290,19 @@ const submit = () => {
                         </select>
                     </label>
 
-                    <label class="field">
+                    <label v-if="form.mode === 'property'" class="field">
                         <span>Clave de mapeo</span>
                         <input v-model="form.mapping_key" type="text" placeholder="raw.associations.deals.0.owner.email">
                         <small>Opcional. Si está vacío, se usa la clave de la propiedad origen. Soporta rutas enriquecidas como hs_terms, raw.properties.hs_terms, raw.associations.deals.0.owner.email o entity_results.company.target_id.</small>
+                        <small>Para respuestas de almacenes usa destination_response.data.existencias, destination_response.data.stock_maximo o destination_response.data.warehouse_records.0.exist. Los registros individuales corresponden a los almacenes seleccionados.</small>
+                        <small>Para preparar cotizaciones SAE usa contact.properties.calle_envio, quote.properties.hs_sender_email o line_item.properties.clave. El nombre completo calculado está disponible como contact_name.</small>
                     </label>
 
                     <label class="field">
                         <span>Meta JSON</span>
                         <textarea v-model="form.meta_text" rows="5" placeholder='{"transform":"decimal","default_value":0,"apply_default_when":["missing","null","empty"]}' />
                         <small>Opcional. Admite transformaciones y valores predeterminados cuando la propiedad origen no existe, es nula o está vacía.</small>
+                        <small>En prepareAspelQuote define {"scope":"header"} para cabecera/dirección o {"scope":"line_item"} para cada partida.</small>
                     </label>
 
                     <label class="check">

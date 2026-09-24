@@ -50,6 +50,57 @@ class HubspotService extends BaseService
         return $this->success('Deal property change received.', $this->buildPropertyChangePayload($subscriptionType, $payload));
     }
 
+    public function prepareAspelQuote(array $payload): array
+    {
+        return app(AspelQuotePreparationService::class)->prepare($this->event, $payload, $this->hubspotApi);
+    }
+
+    public function syncQuoteExecutionResponse(array $payload): array
+    {
+        $quoteId = (string) ($payload['hubspotQuoteId'] ?? $payload['hubspot_object_id'] ?? '');
+        $dealId = (string) ($payload['hubspotDealId'] ?? '');
+        $properties = $this->buildHubspotObjectPropertiesFromResponse($payload);
+        $destinationData = Arr::get($payload, 'destination_response.data', []);
+        $statusCode = (int) Arr::get($payload, 'destination_response.status_code', 0);
+        $properties = array_merge($properties, [
+            'sync_status_aspel' => $statusCode === 200 ? 'already_exists' : 'success',
+            'last_sync_aspel' => now()->getTimestampMs(), 'last_error_aspel' => '',
+        ]);
+        $response = $this->hubspotApi->updateObject('quotes', $quoteId, $properties);
+        $note = null;
+        if ($response['success'] ?? false) {
+            $note = $dealId === ''
+                ? ['success' => false, 'attempted' => false, 'reason' => 'missing_hubspot_deal_id']
+                : $this->hubspotApi->addNoteToObject('deals', $dealId, $this->aspelQuoteSuccessNote(
+                    $quoteId,
+                    is_array($destinationData) ? $destinationData : [],
+                    $statusCode
+                ));
+        } else {
+            $note = $this->hubspotApi->addNoteToObject('deals', $dealId,
+                '[Integrador ASPEL] SAE emitio la cotizacion, pero fallo su write-back a HubSpot. No generar otro documento. '.json_encode($response));
+        }
+        return ['success' => (bool) ($response['success'] ?? false), 'message' => 'ASPEL quote response write-back.',
+            'data' => ['response' => $response, 'hubspot_note' => $note, 'properties' => $properties]];
+    }
+
+    private function aspelQuoteSuccessNote(string $quoteId, array $data, int $statusCode): string
+    {
+        $operation = $statusCode === 200 ? 'localizada como existente' : 'creada correctamente';
+        $serie = trim((string) ($data['serie'] ?? ''));
+        $lines = [
+            '[Integrador ASPEL] Cotizacion '.$operation.' en SAE.',
+            'Documento SAE: '.($data['cveDoc'] ?? 'N/D'),
+            'Folio: '.($data['folio'] ?? 'N/D'),
+            'Serie: '.($serie !== '' ? $serie : 'Sin serie'),
+            'Importe: '.($data['importe'] ?? 'N/D'),
+            'Fecha documento: '.($data['fechaDocumento'] ?? 'N/D'),
+            'HubSpot Quote ID: '.$quoteId,
+        ];
+
+        return implode("\n", $lines);
+    }
+
     public function contactPropertyChange(string $subscriptionType, array $payload, $record): array
     {
         return $this->success('Contact property change received.', $this->buildPropertyChangePayload($subscriptionType, $payload));
@@ -2096,14 +2147,23 @@ class HubspotService extends BaseService
             ];
         }
 
-        $properties = $this->buildHubspotLineItemPropertiesFromResponse($payload);
+        $properties = $this->buildHubspotObjectPropertiesFromResponse($payload);
 
         if ($properties === []) {
-            return $this->success('No mapped HubSpot line item properties found in destination response.', [
-                'line_item_id' => $lineItemId,
-                'destination_response_keys' => $this->extractDestinationResponseKeys($payload),
-                'updated_properties' => [],
-            ]);
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'No configured HubSpot line item mappings produced properties.',
+                'data' => [
+                    'reason' => 'no_mapped_line_item_properties',
+                    'service_class' => static::class,
+                    'method_name' => 'syncLineItemExecutionResponse',
+                    'line_item_id' => $lineItemId,
+                    'destination_response_keys' => $this->extractDestinationResponseKeys($payload),
+                    'updated_properties' => [],
+                    'output_payload' => [],
+                ],
+            ];
         }
 
         $response = $this->hubspotApi->updateObject('line_items', $lineItemId, $properties);
@@ -3051,6 +3111,9 @@ class HubspotService extends BaseService
             ->filter(static fn (PropertyRelationship $relationship): bool => (bool) $relationship->active);
 
         foreach ($relationships as $relationship) {
+            if ($this->applyHubspotConstantMapping($relationship, $properties)) {
+                continue;
+            }
             $hubspotKey = $relationship->property?->key ?: $relationship->property?->name;
             $targetKey = $relationship->relatedProperty?->key ?: $relationship->relatedProperty?->name;
 
@@ -3113,6 +3176,9 @@ class HubspotService extends BaseService
             ->filter(static fn (PropertyRelationship $relationship): bool => (bool) $relationship->active);
 
         foreach ($relationships as $relationship) {
+            if ($this->applyHubspotConstantMapping($relationship, $properties)) {
+                continue;
+            }
             $hubspotKey = $relationship->property?->key ?: $relationship->property?->name;
             $sourceKey = $relationship->relatedProperty?->key ?: $relationship->relatedProperty?->name;
 
@@ -3156,6 +3222,24 @@ class HubspotService extends BaseService
         $this->recordMappingDefaultsApplied($defaultsApplied);
 
         return $properties;
+    }
+
+    private function applyHubspotConstantMapping(PropertyRelationship $relationship, array &$properties): bool
+    {
+        $meta = $relationship->meta ?? [];
+        if (($meta['mode'] ?? null) !== 'constant') {
+            return false;
+        }
+
+        $target = $relationship->relatedProperty;
+        $value = $meta['value'] ?? null;
+        if ($target && (int) $target->platform_id === (int) $this->platform->id && is_scalar($value)) {
+            $properties[$target->key] = $this->normalizeHubspotPropertyValue(
+                $this->applyRelationshipTransform($relationship, $value)
+            );
+        }
+
+        return true;
     }
 
     /**
@@ -3747,29 +3831,71 @@ class HubspotService extends BaseService
     /**
      * @return array<string, scalar|null>
      */
-    private function buildHubspotLineItemPropertiesFromResponse(array $payload): array
+    private function buildHubspotObjectPropertiesFromResponse(array $payload): array
     {
+        $mappingEventId = $this->event?->meta['mapping_event_id'] ?? $this->event?->id;
+        $mappingEvent = Event::query()
+            ->with(['propertyRelationships.property', 'propertyRelationships.relatedProperty'])
+            ->find($mappingEventId);
+        if (! $mappingEvent) {
+            return [];
+        }
+
         $responseData = Arr::get($payload, 'destination_response.data', []);
         $responseNestedData = Arr::get($responseData, 'data', []);
 
         $properties = [];
+        $defaultsApplied = [];
 
-        foreach ([
-            'existencias' => 'existencias',
-            'stock_maximo' => 'stock_maximo',
-            'stock_minimo' => 'stock_minimo',
-        ] as $hubspotKey => $sourceKey) {
+        foreach ($mappingEvent->propertyRelationships as $relationship) {
+            $target = $relationship->relatedProperty;
+            if (! $relationship->active || ! $target
+                || (int) $target->platform_id !== (int) $this->platform->id
+                || in_array($target->key, ['hubspot_object_id', 'hubspotObjectId', 'hs_object_id', 'objectId', 'id', 'source_event_id'], true)
+            ) {
+                continue;
+            }
+
+            if ($this->applyHubspotConstantMapping($relationship, $properties)) {
+                continue;
+            }
+
+            $hubspotKey = $target->key;
+            $sourceKey = $relationship->mapping_key ?: $relationship->property?->key;
+            if (! is_string($sourceKey) || trim($sourceKey) === '') {
+                continue;
+            }
+
+            // Mapping paths are resolved only within the destination response, not technical context.
+            $sourceKey = preg_replace('/^destination_response\.data\./', '', $sourceKey);
+            $sourceExists = Arr::has($responseData, $sourceKey)
+                || (is_array($responseNestedData) && Arr::has($responseNestedData, $sourceKey));
             $value = $this->firstMappedValue([
                 Arr::get($responseData, $sourceKey),
                 Arr::get($responseNestedData, $sourceKey),
             ]);
+            $resolution = $this->resolveRelationshipDefaultValue($relationship, $value, $sourceExists);
+            $value = $resolution['value'];
+            if ($resolution['applied']) {
+                $defaultsApplied[] = [
+                    'relationship_id' => $relationship->id,
+                    'source_property' => $sourceKey,
+                    'destination_property' => $hubspotKey,
+                    'reason' => $resolution['reason'],
+                    'default_value' => $value,
+                ];
+            }
 
             if ($value === null) {
                 continue;
             }
 
-            $properties[$hubspotKey] = $this->normalizeHubspotPropertyValue($value);
+            $properties[$hubspotKey] = $this->normalizeHubspotPropertyValue(
+                $this->applyRelationshipTransform($relationship, $value)
+            );
         }
+
+        $this->recordMappingDefaultsApplied($defaultsApplied);
 
         return $properties;
     }

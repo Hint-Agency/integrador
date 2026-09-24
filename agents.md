@@ -34,6 +34,7 @@ Construir un sistema de integración multiplataforma que sincronice datos entre 
 12. Modelar sincronizaciones manuales/controladas por plataforma usando propiedades técnicas `sync_to_{platform}` y write-back de estado técnico en HubSpot.
 13. Soportar polling programado de contactos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc` y matching por `clave`, `rfc`, `phone`, `email`.
 14. Soportar polling programado de productos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc`, detalle por `clave` y matching de producto por `clave`.
+15. Cotizaciones ASPEL: disparar por etapas configuradas de negocio, preparar una unica cotizacion con su contacto principal y sus propias partidas, reconsultar precios/listas, bloquear diferencias sin corregirlas automaticamente, registrar notas en el negocio y write-back del documento en la cotizacion. Mantener IDs en fallos tecnicos y exigir nueva cotizacion tras errores de negocio.
 
 ### 2.4 Límites
 1. No inventar endpoints, credenciales o comportamientos no descritos.

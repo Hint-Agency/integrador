@@ -7,6 +7,7 @@ use App\Models\Record;
 use App\Services\EventFlowService;
 use App\Services\EventProcessingService;
 use App\Services\Hubspot\HubspotApiServiceRefactored;
+use App\Services\Hubspot\HubspotLineItemCustomerContextService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Bus\Queueable;
@@ -45,6 +46,9 @@ class ProcessNextEventJob implements ShouldQueue
         }
 
         $preparedPayload = $this->preparePayloadForNextEvent($nextEvent, $eventFlowService, $hubspotApiService);
+        if ($preparedPayload === null) {
+            return;
+        }
 
         $this->mergeRecordDetails([
             'output_payload' => $preparedPayload,
@@ -63,10 +67,35 @@ class ProcessNextEventJob implements ShouldQueue
         Event $nextEvent,
         EventFlowService $eventFlowService,
         HubspotApiServiceRefactored $hubspotApiService
-    ): array {
+    ): ?array {
         $payload = $this->maybeEnrichHubspotObjectPayload($this->event, $this->data, $hubspotApiService);
 
-        return $eventFlowService->transformPayloadForEvent($this->event, $payload);
+        $customerContext = [];
+        if ($nextEvent->method_name === 'syncLineItemWarehouseInventory'
+            && ($nextEvent->meta['require_customer_context'] ?? false)) {
+            try {
+                $result = app(HubspotLineItemCustomerContextService::class)->resolve(
+                    $hubspotApiService,
+                    (string) ($payload['hubspot_object_id'] ?? $payload['objectId'] ?? ''),
+                    $nextEvent->meta ?? []
+                );
+            } catch (\Throwable $exception) {
+                $this->mergeRecordDetails(['warehouse_customer_context' => [
+                    'success' => false, 'reason' => 'customer_context_exception',
+                    'exception_class' => get_class($exception),
+                ]]);
+                $this->record->update(['status' => 'error', 'message' => 'Failed to resolve warehouse customer context.']);
+                throw $exception;
+            }
+            $this->mergeRecordDetails(['warehouse_customer_context' => $result]);
+            if (! $result['success']) {
+                $this->record->update(['status' => $result['status'], 'message' => $result['reason']]);
+                return null;
+            }
+            $customerContext = $result['context'];
+        }
+
+        return array_merge($eventFlowService->transformPayloadForEvent($this->event, $payload), $customerContext);
     }
 
     private function maybeEnrichHubspotObjectPayload(

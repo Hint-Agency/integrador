@@ -18,6 +18,8 @@ class DatabaseSeeder extends Seeder
         $this->call(RolesAndPermissionsSeeder::class);
         $this->call(SuperAdminSeeder::class);
         $this->call(AzureSqlProductPropertiesSeeder::class);
+        $this->call(AspelWarehouseMappingsSeeder::class);
+        $this->call(AspelQuoteFlowSeeder::class);
 
         $admin = User::query()->firstOrCreate(
             ['email' => env('ADMIN_EMAIL', 'admin@example.com')],
