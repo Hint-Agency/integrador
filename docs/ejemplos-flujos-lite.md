@@ -57,16 +57,16 @@ Plantillas Treble de ejemplo:
 
 ## 3. Resumen de variantes
 
-| Variante | Paso de propietario | Estado inicial del contacto | Politica | Paso Treble | Resultado |
-|---|---|---|---|---|---|
-| 1 | Habilitado | Sin propietario | No aplica | Habilitado | Asigna propietario y envia plantilla. |
-| 2 | Habilitado | Sin propietario | No aplica | Omitido | Solo asigna propietario. |
-| 3 | Habilitado | Con propietario | Conservar y detener | Habilitado | Conserva propietario y no envia plantilla. |
-| 4 | Habilitado | Con propietario | Conservar y continuar | Habilitado | Conserva propietario y envia plantilla. |
-| 5 | Omitido | Con propietario | Validar existente | Habilitado | No reasigna y envia plantilla. |
-| 6 | Omitido | Sin propietario | Validar existente | Habilitado | Detiene el flujo y no envia plantilla. |
-| 7 | Habilitado | Sin propietario | Asignacion fallida | Habilitado | Detiene el flujo y no envia plantilla. |
-| 8 | Cualquier estado | No cumple condiciones | No aplica | Cualquier estado | El flujo no se ejecuta. |
+| Variante | Paso de propietario | Estado inicial del contacto | Politica | Paso Treble | Resultado | Validado |
+|---|---|---|---|---|---|---|
+| 1 | Habilitado | Sin propietario | No aplica | Habilitado | Asigna propietario y envia plantilla. | ✅ |
+| 2 | Habilitado | Sin propietario | No aplica | Omitido | Solo asigna propietario. | ✅ |
+| 3 | Habilitado | Con propietario | Conservar y detener | Habilitado | Conserva propietario y no envia plantilla. | ✅ |
+| 4 | Habilitado | Con propietario | Conservar y continuar | Habilitado | Conserva propietario y envia plantilla. | ✅ |
+| 5 | Omitido | Con propietario | Validar existente | Habilitado | No reasigna y envia plantilla. | ✅ |
+| 6 | Omitido | Sin propietario | Validar existente | Habilitado | Detiene el flujo y no envia plantilla. | ✅ |
+| 7 | Habilitado | Sin propietario | Asignacion fallida | Habilitado | Detiene el flujo y no envia plantilla. | ✅ |
+| 8 | Cualquier estado | No cumple condiciones | No aplica | Cualquier estado | El flujo no se ejecuta. | ✅ |
 
 ## 4. Ejemplo 1 - Asignar propietario y enviar a Treble
 
