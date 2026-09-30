@@ -24,8 +24,8 @@ class TrebleService
         $headers = $this->resolveHeaders($connection);
         $payload = $this->buildPayload($connection, $template, $contact, $context);
         $resolvedPath = str_replace('{poll_id}', rawurlencode($pollId), $sendPath);
-        $resolvedPath = '/' . ltrim($resolvedPath, '/');
-        $url = $baseUrl . $resolvedPath;
+        $resolvedPath = '/'.ltrim($resolvedPath, '/');
+        $url = $baseUrl.$resolvedPath;
 
         /** @var Response $response */
         $response = Http::withHeaders($headers)
@@ -44,6 +44,28 @@ class TrebleService
             );
         }
 
+        $responseData = $response->json() ?? [];
+        $duplicateUsers = Arr::get($responseData, 'duplicate_users', Arr::get($responseData, 'data.duplicate_users', []));
+        $conversationIds = Arr::get($responseData, 'conversations_id', Arr::get($responseData, 'data.conversations_id', []));
+
+        if (is_array($duplicateUsers) && $duplicateUsers !== [] && (! is_array($conversationIds) || $conversationIds === [])) {
+            return [
+                'success' => false,
+                'status_code' => $response->status(),
+                'retryable' => true,
+                'request_id' => $response->header('x-request-id') ?? $response->header('x-correlation-id'),
+                'external_id' => null,
+                'data' => $responseData,
+                'error' => [
+                    'code' => 'duplicate_user',
+                    'message' => 'Treble skipped the recipient because it was recently deployed.',
+                    'details' => [
+                        'duplicate_users' => $duplicateUsers,
+                    ],
+                ],
+            ];
+        }
+
         return [
             'success' => true,
             'status_code' => $response->status(),
@@ -53,9 +75,11 @@ class TrebleService
                 ?? Arr::get($response->json(), 'session.external_id')
                 ?? Arr::get($response->json(), 'data.external_id')
                 ?? Arr::get($response->json(), 'data.session.external_id')
+                ?? Arr::get($response->json(), 'conversations_id.0')
+                ?? Arr::get($response->json(), 'data.conversations_id.0')
                 ?? Arr::get($response->json(), 'data.id')
                 ?? Arr::get($response->json(), 'message_id'),
-            'data' => $response->json() ?? [],
+            'data' => $responseData,
             'error' => [
                 'code' => null,
                 'message' => null,
@@ -70,7 +94,7 @@ class TrebleService
         $authMode = (string) ($connection->settings['auth_mode'] ?? '');
 
         if ($authMode === 'bearer_api_key' && ! empty($connection->credentials['api_key'])) {
-            $headers['Authorization'] = 'Bearer ' . $connection->credentials['api_key'];
+            $headers['Authorization'] = 'Bearer '.$connection->credentials['api_key'];
         }
 
         if ($authMode === 'authorization_header' && ! empty($connection->credentials['api_key'])) {
@@ -86,7 +110,7 @@ class TrebleService
             $user = (string) ($connection->credentials['username'] ?? '');
             $password = (string) ($connection->credentials['password'] ?? '');
             if ($user !== '' || $password !== '') {
-                $headers['Authorization'] = 'Basic ' . base64_encode($user . ':' . $password);
+                $headers['Authorization'] = 'Basic '.base64_encode($user.':'.$password);
             }
         }
 

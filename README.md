@@ -5,6 +5,7 @@ Sistema de integracion multiplataforma (Laravel 11 + Inertia).
 Documentacion oficial:
 - `spec.md` (especificacion oficial, LOCKED)
 - `agents.md` (reglas de implementacion)
+- `docs/ejemplos-flujos-lite.md` (ejemplos compartibles de las variantes de flujo)
 
 ## Requisitos
 

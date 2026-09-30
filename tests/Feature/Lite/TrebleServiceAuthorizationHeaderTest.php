@@ -132,4 +132,91 @@ class TrebleServiceAuthorizationHeaderTest extends TestCase
         $this->assertTrue($response['success']);
         $this->assertSame('ext-456', $response['external_id']);
     }
+
+    public function test_treble_service_uses_first_conversation_id_as_external_id(): void
+    {
+        [$connection, $template] = $this->connectionAndTemplate();
+
+        Http::fake([
+            '*' => Http::response([
+                'id' => 'poll-123',
+                'conversations_id' => ['conversation-123'],
+                'message' => 'The poll was deployed',
+            ], 200),
+        ]);
+
+        $response = app(TrebleService::class)->sendTemplate(
+            $connection,
+            $template,
+            ['firstname' => 'Carlos', 'phone' => '+529991412826']
+        );
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('conversation-123', $response['external_id']);
+    }
+
+    public function test_treble_service_reports_duplicate_user_as_retryable_failure(): void
+    {
+        [$connection, $template] = $this->connectionAndTemplate();
+
+        Http::fake([
+            '*' => Http::response([
+                'id' => 'poll-123',
+                'message' => 'The poll was deployed',
+                'duplicate_users' => [[
+                    'cellphone' => '9991412826',
+                    'country_code' => '+52',
+                    'retry_after_seconds' => 53,
+                ]],
+                'conversations_id' => [],
+            ], 200),
+        ]);
+
+        $response = app(TrebleService::class)->sendTemplate(
+            $connection,
+            $template,
+            ['firstname' => 'Carlos', 'phone' => '+529991412826']
+        );
+
+        $this->assertFalse($response['success']);
+        $this->assertTrue($response['retryable']);
+        $this->assertSame('duplicate_user', $response['error']['code']);
+        $this->assertSame(53, $response['error']['details']['duplicate_users'][0]['retry_after_seconds']);
+    }
+
+    private function connectionAndTemplate(): array
+    {
+        $client = Client::query()->create([
+            'name' => 'Acme',
+            'slug' => 'acme',
+            'active' => true,
+        ]);
+
+        $connection = PlatformConnection::query()->create([
+            'client_id' => $client->id,
+            'platform_type' => 'treble',
+            'name' => 'Treble',
+            'slug' => 'treble',
+            'base_url' => 'https://main.treble.ai',
+            'credentials' => ['api_key' => 'plain-auth-token'],
+            'settings' => [
+                'send_path' => '/deployment/api/poll/{poll_id}',
+                'auth_mode' => 'authorization_header',
+                'country_code_default' => '52',
+            ],
+            'active' => true,
+        ]);
+
+        $template = TrebleTemplate::query()->create([
+            'client_id' => $client->id,
+            'name' => 'Bienvenida',
+            'external_template_id' => '1276100',
+            'request_template' => [
+                'name' => '{{contact.firstname}}',
+            ],
+            'active' => true,
+        ]);
+
+        return [$connection, $template];
+    }
 }

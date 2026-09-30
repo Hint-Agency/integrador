@@ -12,8 +12,7 @@ class TrebleStatusWebhookService
 {
     public function __construct(
         protected EventLoggingService $eventLoggingService
-    ) {
-    }
+    ) {}
 
     public function process(Client $client, PlatformConnection $connection, array $payload): array
     {
@@ -25,6 +24,8 @@ class TrebleStatusWebhookService
         $countryCode = (string) Arr::get($payload, 'user.country_code', ($connection->settings['country_code_default'] ?? '52'));
         $phone = $this->normalizePhone((string) Arr::get($payload, 'user.cellphone', ''), $countryCode);
         $hsmName = trim((string) Arr::get($payload, 'hsm.name', ''));
+        $failureReason = trim((string) Arr::get($payload, 'failure_reason', ''));
+        $isFailure = $eventType === 'deployment.failure';
 
         if ($eventId === '' || $eventType === '') {
             return [
@@ -37,11 +38,13 @@ class TrebleStatusWebhookService
         $record = $this->findMatchingRecord($client->id, $externalId, $phone, $hsmName);
         $callbackRecord = $this->eventLoggingService->createEventRecord(
             'treble.status.callback',
-            $record ? 'success' : 'warning',
+            $record ? ($isFailure ? 'error' : 'success') : 'warning',
             $payload,
-            $record
-                ? 'Treble status callback received and matched.'
-                : 'Treble status callback received without match.',
+            match (true) {
+                ! $record => 'Treble status callback received without match.',
+                $isFailure => 'Treble deployment failure callback received and matched.',
+                default => 'Treble status callback received and matched.',
+            },
             null,
             null,
             $client->id
@@ -80,6 +83,7 @@ class TrebleStatusWebhookService
                         'external_id' => $externalId !== '' ? $externalId : null,
                         'phone' => $phone !== '' ? $phone : null,
                         'template_name' => $hsmName !== '' ? $hsmName : null,
+                        'failure_reason' => $failureReason !== '' ? $failureReason : null,
                         'matched_record_id' => $record->id,
                         'duplicate' => true,
                     ],
@@ -111,13 +115,17 @@ class TrebleStatusWebhookService
             'event_type' => $eventType,
             'external_id' => $externalId !== '' ? $externalId : ($trebleStatus['external_id'] ?? null),
             'closed_at' => $closedAt !== '' ? $closedAt : ($trebleStatus['closed_at'] ?? null),
+            'failure_reason' => $failureReason !== '' ? $failureReason : null,
             'last_payload' => $payload,
             'updated_at' => now()->toISOString(),
             'history' => $history,
         ];
 
         $record->update([
-            'message' => 'Treble status updated: ' . $eventType,
+            'status' => $isFailure ? 'error' : $record->status,
+            'message' => $isFailure
+                ? 'Treble deployment failed'.($failureReason !== '' ? ': '.$failureReason : '.')
+                : 'Treble status updated: '.$eventType,
             'details' => $details,
         ]);
 
@@ -130,6 +138,7 @@ class TrebleStatusWebhookService
                 'template_name' => $hsmName !== '' ? $hsmName : null,
                 'matched_record_id' => $record->id,
                 'closed_at' => $closedAt !== '' ? $closedAt : null,
+                'failure_reason' => $failureReason !== '' ? $failureReason : null,
             ],
         ]);
 
@@ -149,7 +158,9 @@ class TrebleStatusWebhookService
                 ->where('client_id', $clientId)
                 ->where(function ($query) use ($externalId): void {
                     $query->where('details->treble_status->external_id', $externalId)
-                        ->orWhere('details->treble_response->external_id', $externalId);
+                        ->orWhere('details->treble_response->external_id', $externalId)
+                        ->orWhereJsonContains('details->treble_response->data->conversations_id', $externalId)
+                        ->orWhereJsonContains('details->treble_response->data->data->conversations_id', $externalId);
                 })
                 ->latest('id')
                 ->first();

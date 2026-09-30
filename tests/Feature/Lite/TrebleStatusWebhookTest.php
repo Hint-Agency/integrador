@@ -16,7 +16,7 @@ class TrebleStatusWebhookTest extends TestCase
     {
         [$client] = $this->seedClientAndConnection();
 
-        $response = $this->postJson('/webhooks/' . $client->slug . '/treble/status', [
+        $response = $this->postJson('/webhooks/'.$client->slug.'/treble/status', [
             'event_id' => 'evt-1',
             'event_type' => 'session.close',
             'session' => ['external_id' => 'ext-1'],
@@ -65,7 +65,7 @@ class TrebleStatusWebhookTest extends TestCase
             ],
         ];
 
-        $response = $this->postJson('/webhooks/' . $client->slug . '/treble/status', $payload, [
+        $response = $this->postJson('/webhooks/'.$client->slug.'/treble/status', $payload, [
             'X-Treble-Webhook-Secret' => 'status-secret',
         ]);
 
@@ -109,8 +109,8 @@ class TrebleStatusWebhookTest extends TestCase
         ];
 
         $headers = ['X-Treble-Webhook-Secret' => 'status-secret'];
-        $this->postJson('/webhooks/' . $client->slug . '/treble/status', $payload, $headers)->assertOk();
-        $this->postJson('/webhooks/' . $client->slug . '/treble/status', $payload, $headers)->assertOk();
+        $this->postJson('/webhooks/'.$client->slug.'/treble/status', $payload, $headers)->assertOk();
+        $this->postJson('/webhooks/'.$client->slug.'/treble/status', $payload, $headers)->assertOk();
 
         $record->refresh();
         $this->assertCount(1, $record->details['treble_status']['history'] ?? []);
@@ -152,7 +152,7 @@ class TrebleStatusWebhookTest extends TestCase
             ],
         ];
 
-        $response = $this->postJson('/webhooks/' . $client->slug . '/treble/status', $payload, [
+        $response = $this->postJson('/webhooks/'.$client->slug.'/treble/status', $payload, [
             'X-Treble-Webhook-Secret' => 'status-secret',
         ]);
 
@@ -161,6 +161,104 @@ class TrebleStatusWebhookTest extends TestCase
         $record->refresh();
         $this->assertSame('session.close', $record->details['treble_status']['current'] ?? null);
         $this->assertCount(1, $record->details['treble_status']['history'] ?? []);
+    }
+
+    public function test_treble_callback_matches_historical_record_by_conversation_id(): void
+    {
+        [$client] = $this->seedClientAndConnection();
+
+        $record = Record::query()->create([
+            'client_id' => $client->id,
+            'event_type' => 'contact.propertyChange',
+            'status' => 'success',
+            'payload' => [],
+            'message' => 'Treble template dispatched successfully.',
+            'details' => [
+                'matched_rule_name' => 'Administrative rule name',
+                'treble_request' => [
+                    'template_name' => 'Administrative template name',
+                    'phone_normalized' => '9991412826',
+                ],
+                'treble_response' => [
+                    'external_id' => null,
+                    'data' => [
+                        'conversations_id' => ['conversation-123'],
+                    ],
+                ],
+            ],
+        ]);
+
+        $response = $this->postJson('/webhooks/'.$client->slug.'/treble/status', [
+            'event_id' => 'evt-conversation-1',
+            'timestamp' => '2026-09-29T22:04:04Z',
+            'event_type' => 'session.close',
+            'session' => [
+                'external_id' => 'conversation-123',
+                'closed_at' => '2026-09-29T22:03:36Z',
+            ],
+            'user' => [
+                'country_code' => '+52',
+                'cellphone' => '19991412826',
+            ],
+            'hsm' => [
+                'name' => 'technical_hsm_name',
+            ],
+        ], [
+            'X-Treble-Webhook-Secret' => 'status-secret',
+        ]);
+
+        $response->assertOk()->assertJsonPath('results.0.matched', true)
+            ->assertJsonPath('results.0.record_id', $record->id);
+
+        $record->refresh();
+        $this->assertSame('session.close', $record->details['treble_status']['current']);
+        $this->assertSame('conversation-123', $record->details['treble_status']['external_id']);
+    }
+
+    public function test_deployment_failure_marks_matched_record_and_callback_as_error(): void
+    {
+        [$client] = $this->seedClientAndConnection();
+
+        $record = Record::query()->create([
+            'client_id' => $client->id,
+            'event_type' => 'contact.propertyChange',
+            'status' => 'success',
+            'payload' => [],
+            'message' => 'Treble template dispatched successfully.',
+            'details' => [
+                'treble_request' => [
+                    'phone_normalized' => '9991412826',
+                ],
+            ],
+        ]);
+
+        $response = $this->postJson('/webhooks/'.$client->slug.'/treble/status', [
+            'event_id' => 'evt-failure-1',
+            'timestamp' => '2026-09-29T23:26:11Z',
+            'event_type' => 'deployment.failure',
+            'failure_reason' => 'FAILURE_BY_HUMAN_HANDOVER',
+            'failed_at' => '2026-09-29T23:26:11Z',
+            'user' => [
+                'country_code' => '+52',
+                'cellphone' => '9991412826',
+            ],
+        ], [
+            'X-Treble-Webhook-Secret' => 'status-secret',
+        ]);
+
+        $response->assertOk()->assertJsonPath('results.0.matched', true)
+            ->assertJsonPath('results.0.record_id', $record->id);
+
+        $record->refresh();
+        $this->assertSame('error', $record->status);
+        $this->assertSame('FAILURE_BY_HUMAN_HANDOVER', $record->details['treble_status']['failure_reason']);
+        $this->assertSame('Treble deployment failed: FAILURE_BY_HUMAN_HANDOVER', $record->message);
+
+        $this->assertDatabaseHas('records', [
+            'client_id' => $client->id,
+            'event_type' => 'treble.status.callback',
+            'status' => 'error',
+        ]);
     }
 
     public function test_treble_callback_creates_visible_record_when_unmatched(): void
@@ -183,7 +281,7 @@ class TrebleStatusWebhookTest extends TestCase
             ],
         ];
 
-        $this->postJson('/webhooks/' . $client->slug . '/treble/status', $payload, [
+        $this->postJson('/webhooks/'.$client->slug.'/treble/status', $payload, [
             'X-Treble-Webhook-Secret' => 'status-secret',
         ])->assertOk();
 
