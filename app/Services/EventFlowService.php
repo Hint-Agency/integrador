@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Event;
+use App\Models\PropertyRelationship;
 use App\Models\Record;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
@@ -302,7 +303,21 @@ class EventFlowService
         return $transformed;
     }
 
-    private function resolveCatalogMappingValue(?array $meta, Event $event, mixed $value): array
+    /**
+     * Resolves a relationship catalog in its configured direction or in reverse.
+     *
+     * @return array{matched:bool,value:mixed}
+     */
+    public function resolveRelationshipCatalogValue(
+        Event $event,
+        PropertyRelationship $relationship,
+        mixed $value,
+        bool $reverse = false
+    ): array {
+        return $this->resolveCatalogMappingValue($relationship->meta, $event, $value, $reverse);
+    }
+
+    private function resolveCatalogMappingValue(?array $meta, Event $event, mixed $value, bool $reverse = false): array
     {
         $catalogConfig = $meta['catalog'] ?? null;
         if (! is_array($catalogConfig)) {
@@ -333,7 +348,13 @@ class EventFlowService
             ];
         }
 
-        return $this->catalogLookup($catalog, $value, (string) ($catalogConfig['match'] ?? 'value'), (string) ($catalogConfig['output'] ?? 'key'));
+        $match = (string) ($catalogConfig['match'] ?? 'value');
+        $output = (string) ($catalogConfig['output'] ?? 'key');
+        if ($reverse) {
+            [$match, $output] = [$output, $match];
+        }
+
+        return $this->catalogLookup($catalog, $value, $match, $output);
     }
 
     private function catalogLookup(array $catalog, mixed $value, string $match, string $output): array

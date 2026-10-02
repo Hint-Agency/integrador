@@ -2,14 +2,20 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\Generic\EndpointExecutionJob;
 use App\Models\Event;
 use App\Models\EventHttpConfig;
 use App\Models\Platform;
+use App\Models\Record;
+use App\Services\EventLoggingService;
+use App\Services\EventMappingContextResolver;
+use App\Services\EventProcessingService;
 use App\Services\EventTriggerService;
 use App\Services\Generic\GenericHttpAdapter;
 use App\Services\Hubspot\AspelQuotePreparationService;
 use App\Services\Hubspot\HubspotApiServiceRefactored;
 use App\Services\Hubspot\HubspotService;
+use App\Services\RateLimitService;
 use Database\Seeders\AspelQuoteFlowSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
@@ -31,6 +37,7 @@ class AspelQuoteFlowTest extends TestCase
                 'path' => $path, 'auth_mode' => 'bearer_api_key', 'active' => true]);
         }
         $this->seed(AspelQuoteFlowSeeder::class);
+
         return [$hubspot, Event::where('method_name', 'prepareAspelQuote')->firstOrFail()];
     }
 
@@ -39,8 +46,8 @@ class AspelQuoteFlowTest extends TestCase
         string $status = '',
         array $quoteIds = ['Q1'],
         array $quoteOverrides = []
-    ): HubspotApiServiceRefactored
-    {
+    ): HubspotApiServiceRefactored {
+        $publishedAt = now()->subHour()->toIso8601String();
         $api = Mockery::mock(HubspotApiServiceRefactored::class);
         $api->shouldReceive('getObjectAssociations')->with('deals', 'D1', 'quotes')
             ->andReturn(['success' => true, 'data' => ['results' => array_map(
@@ -53,10 +60,14 @@ class AspelQuoteFlowTest extends TestCase
             static fn (string $id): bool => in_array($id, $quoteIds, true)
         ), 'line_items')
             ->andReturn(['success' => true, 'data' => ['results' => [['toObjectId' => 'L1']]]]);
-        $api->shouldReceive('getObject')->andReturnUsing(static function ($object, $id, $properties) use ($contactChanges, $status, $quoteOverrides): array {
+        $api->shouldReceive('getObject')->andReturnUsing(static function ($object, $id, $properties) use ($contactChanges, $status, $quoteOverrides, $publishedAt): array {
             $values = match ($object) {
                 'quotes' => array_merge(
-                    ['hs_sender_email' => 'vendedor@empresa.com', 'sync_status_aspel' => $status],
+                    [
+                        'hs_sender_email' => 'vendedor@empresa.com',
+                        'hs_last_published_date' => $publishedAt,
+                        'sync_status_aspel' => $status,
+                    ],
                     $quoteOverrides[$id] ?? []
                 ),
                 'contacts' => array_merge(['clave' => '58329', 'lista_de_precios' => '4', 'firstname' => 'Ana', 'lastname' => 'Perez',
@@ -65,18 +76,19 @@ class AspelQuoteFlowTest extends TestCase
                 'line_items' => ['clave' => '10020004', 'quantity' => '1', 'almacen_id' => '4', 'prices_list' => '4', 'price' => '125.5'],
                 default => [],
             };
+
             return ['success' => true, 'data' => ['id' => $id, 'properties' => $values]];
         });
         $api->shouldReceive('updateObject')->andReturn(['success' => true, 'data' => []]);
         $api->shouldReceive('addNoteToObject')->andReturn(['success' => true, 'data' => ['id' => 'NOTE1']]);
+
         return $api;
     }
 
     private function pricing(int $list = 4, bool $tax = false): void
     {
         $adapter = Mockery::mock(GenericHttpAdapter::class);
-        $adapter->shouldReceive('send')->once()->withArgs(static fn ($platform, $endpoint, $method, $headers, $query, $body): bool =>
-            $endpoint === 'https://sae.test/api/almacenes/10020004' && $method === 'GET'
+        $adapter->shouldReceive('send')->once()->withArgs(static fn ($platform, $endpoint, $method, $headers, $query, $body): bool => $endpoint === 'https://sae.test/api/almacenes/10020004' && $method === 'GET'
             && $query === ['claveCliente' => '58329', 'cveAlmacen' => '4'] && $body === [])
             ->andReturn(['success' => true, 'data' => [['cveArt' => '10020004', 'cveAlm' => '4', 'listaPrecio' => $list,
                 'precio' => 125.5, 'incluyeImpuestos' => $tax, 'exist' => 10]]]);
@@ -99,7 +111,7 @@ class AspelQuoteFlowTest extends TestCase
         $this->assertFalse(app(EventTriggerService::class)->evaluateEventTriggers($root, ['propertyName' => 'sync_status_aspel', 'propertyValue' => 'success']));
         $this->assertSame('createQuote', $prepare->to_event->method_name);
         $this->assertSame('syncQuoteExecutionResponse', $prepare->to_event->to_event->method_name);
-        $mappingContext = app(\App\Services\EventMappingContextResolver::class)->resolve($prepare);
+        $mappingContext = app(EventMappingContextResolver::class)->resolve($prepare);
         $this->assertSame($prepare->to_event->platform_id, $mappingContext['target_platform_id']);
     }
 
@@ -148,11 +160,41 @@ class AspelQuoteFlowTest extends TestCase
         $this->assertSame('missing_or_ambiguous_quote', $result['data']['reason']);
     }
 
+    public function test_only_recent_published_quotes_without_terminal_technical_state_are_candidates(): void
+    {
+        [, $event] = $this->flow();
+        $api = $this->api([], '', ['DRAFT', 'OLD', 'PROCESSING', 'SYNCED', 'PARTIAL', 'READY'], [
+            'DRAFT' => ['hs_last_published_date' => null],
+            'OLD' => ['hs_last_published_date' => now()->subHours(25)->toIso8601String()],
+            'PROCESSING' => ['sync_status_aspel' => 'processing'],
+            'SYNCED' => ['sync_status_aspel' => '', 'aspel_cve_doc' => 'C0001'],
+            'PARTIAL' => ['sync_status_aspel' => '', 'aspel_folio' => '120'],
+        ]);
+        $this->pricing();
+
+        $result = app(AspelQuotePreparationService::class)->prepare($event, ['objectId' => 'D1'], $api);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('READY', $result['data']['output_payload']['hubspotQuoteId']);
+    }
+
+    public function test_unpublished_quotes_are_reported_as_excluded_candidates(): void
+    {
+        [, $event] = $this->flow();
+
+        $result = app(AspelQuotePreparationService::class)->prepare($event, ['objectId' => 'D1'], $this->api(
+            quoteOverrides: ['Q1' => ['hs_last_published_date' => null]]
+        ));
+
+        $this->assertSame('missing_or_ambiguous_quote', $result['data']['reason']);
+        $this->assertSame('not_published', $result['data']['context']['excluded_quotes']['Q1']);
+    }
+
     public function test_new_quote_copy_with_inherited_error_is_not_confused_with_previously_attempted_quote(): void
     {
         [, $event] = $this->flow();
         $this->pricing();
-        \App\Models\Record::create([
+        Record::create([
             'event_id' => $event->id,
             'event_type' => 'object.updated',
             'status' => 'warning',
@@ -175,12 +217,10 @@ class AspelQuoteFlowTest extends TestCase
         [$hubspot] = $this->flow();
         $event = Event::where('method_name', 'syncQuoteExecutionResponse')->firstOrFail();
         $api = Mockery::mock(HubspotApiServiceRefactored::class);
-        $api->shouldReceive('updateObject')->once()->withArgs(static fn ($object, $id, $properties): bool =>
-            $object === 'quotes' && $id === 'Q1' && $properties['aspel_cve_doc'] === 'C0001'
+        $api->shouldReceive('updateObject')->once()->withArgs(static fn ($object, $id, $properties): bool => $object === 'quotes' && $id === 'Q1' && $properties['aspel_cve_doc'] === 'C0001'
             && (string) $properties['aspel_folio'] === '1' && $properties['sync_status_aspel'] === 'already_exists')
             ->andReturn(['success' => true]);
-        $api->shouldReceive('addNoteToObject')->once()->withArgs(static fn ($object, $id, $text): bool =>
-            $object === 'deals' && $id === 'D1' && str_contains($text, 'Documento SAE: C0001')
+        $api->shouldReceive('addNoteToObject')->once()->withArgs(static fn ($object, $id, $text): bool => $object === 'deals' && $id === 'D1' && str_contains($text, 'Documento SAE: C0001')
             && str_contains($text, 'Folio: 1') && str_contains($text, 'HubSpot Quote ID: Q1'))
             ->andReturn(['success' => true, 'data' => ['id' => 'N2']]);
         $result = (new HubspotService($hubspot, $event, null, $api))->syncQuoteExecutionResponse([
@@ -199,19 +239,17 @@ class AspelQuoteFlowTest extends TestCase
         [, $prepare] = $this->flow();
         $event = $prepare->to_event;
         $payload = ['hubspotDealId' => 'D1', 'hubspotQuoteId' => 'Q1', 'source_event_id' => $prepare->id];
-        $record = \App\Models\Record::create(['event_id' => $event->id, 'event_type' => 'generic.external.call',
+        $record = Record::create(['event_id' => $event->id, 'event_type' => 'generic.external.call',
             'status' => 'init', 'payload' => $payload]);
         $api = Mockery::mock(HubspotApiServiceRefactored::class);
-        $api->shouldReceive('updateObject')->once()->withArgs(static fn ($object, $id, $properties): bool =>
-            $object === 'quotes' && $id === 'Q1' && $properties['sync_status_aspel'] === 'error')->andReturn(['success' => true]);
-        $api->shouldReceive('addNoteToObject')->once()->withArgs(static fn ($object, $id, $text): bool =>
-            $object === 'deals' && $id === 'D1' && str_contains($text, 'invalid_aspel_quote_payload'))
+        $api->shouldReceive('updateObject')->once()->withArgs(static fn ($object, $id, $properties): bool => $object === 'quotes' && $id === 'Q1' && $properties['sync_status_aspel'] === 'error')->andReturn(['success' => true]);
+        $api->shouldReceive('addNoteToObject')->once()->withArgs(static fn ($object, $id, $text): bool => $object === 'deals' && $id === 'D1' && str_contains($text, 'invalid_aspel_quote_payload'))
             ->andReturn(['success' => true, 'data' => ['id' => 'N1']]);
         $adapter = Mockery::mock(GenericHttpAdapter::class);
         $adapter->shouldNotReceive('send');
-        (new \App\Jobs\Generic\EndpointExecutionJob($event, $record, $payload))->handle(
-            app(\App\Services\EventProcessingService::class), $adapter,
-            app(\App\Services\EventLoggingService::class), app(\App\Services\RateLimitService::class), $api
+        (new EndpointExecutionJob($event, $record, $payload))->handle(
+            app(EventProcessingService::class), $adapter,
+            app(EventLoggingService::class), app(RateLimitService::class), $api
         );
         $record->refresh();
         $this->assertSame('error', $record->status);

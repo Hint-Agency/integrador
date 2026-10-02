@@ -9,6 +9,7 @@ use App\Models\Property;
 use App\Models\PropertyRelationship;
 use App\Models\Record;
 use App\Services\Base\BaseService;
+use App\Services\EventFlowService;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -80,6 +81,7 @@ class HubspotService extends BaseService
             $note = $this->hubspotApi->addNoteToObject('deals', $dealId,
                 '[Integrador ASPEL] SAE emitio la cotizacion, pero fallo su write-back a HubSpot. No generar otro documento. '.json_encode($response));
         }
+
         return ['success' => (bool) ($response['success'] ?? false), 'message' => 'ASPEL quote response write-back.',
             'data' => ['response' => $response, 'hubspot_note' => $note, 'properties' => $properties]];
     }
@@ -3106,6 +3108,7 @@ class HubspotService extends BaseService
         $properties = [];
         $responseData = Arr::get($payload, 'destination_response.data', []);
         $responseNestedData = Arr::get($responseData, 'data', []);
+        $eventFlowService = app(EventFlowService::class);
 
         $relationships = $mappingEvent->propertyRelationships
             ->filter(static fn (PropertyRelationship $relationship): bool => (bool) $relationship->active);
@@ -3130,8 +3133,18 @@ class HubspotService extends BaseService
                 continue;
             }
 
+            $catalogValue = $eventFlowService->resolveRelationshipCatalogValue(
+                $mappingEvent,
+                $relationship,
+                $value,
+                true
+            );
+            if (! ($catalogValue['matched'] ?? false)) {
+                continue;
+            }
+
             $properties[$hubspotKey] = $this->normalizeHubspotPropertyValue(
-                $this->applyRelationshipTransform($relationship, $value)
+                $this->applyRelationshipTransform($relationship, $catalogValue['value'])
             );
         }
 
@@ -3171,6 +3184,7 @@ class HubspotService extends BaseService
         $properties = [];
         $defaultsApplied = [];
         $nestedData = Arr::get($sourceData, 'data', []);
+        $eventFlowService = app(EventFlowService::class);
 
         $relationships = $mappingEvent->propertyRelationships
             ->filter(static fn (PropertyRelationship $relationship): bool => (bool) $relationship->active);
@@ -3214,8 +3228,18 @@ class HubspotService extends BaseService
                 continue;
             }
 
+            $catalogValue = $eventFlowService->resolveRelationshipCatalogValue(
+                $mappingEvent,
+                $relationship,
+                $value,
+                true
+            );
+            if (! ($catalogValue['matched'] ?? false)) {
+                continue;
+            }
+
             $properties[$hubspotKey] = $this->normalizeHubspotPropertyValue(
-                $this->applyRelationshipTransform($relationship, $value)
+                $this->applyRelationshipTransform($relationship, $catalogValue['value'])
             );
         }
 

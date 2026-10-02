@@ -443,6 +443,9 @@ Las siguientes capacidades existen en `/Users/hint/laravel-sites/integrador` y D
   - `sync_to_odoo`, `sync_status_odoo`, `last_sync_odoo`, `odoo_id`, `last_error_odoo`
   - `sync_to_netsuite`, `sync_status_netsuite`, `last_sync_netsuite`, `netsuite_id`, `last_error_netsuite`
 - Para plataformas implementadas temporalmente mediante `generic.external.call`, el patron de propiedad de control sigue siendo valido y debe coexistir con el contrato HTTP normalizado.
+- Los selectores cuyo valor interno difiera del codigo esperado por ASPEL DEBEN usar catalogos configurables en `platform.settings` y `property_relationships.meta.catalog`; no deben resolverse con condicionales incrustados en el servicio.
+- Catalogo inicial de tipo de cliente (`aspel.catalogs.contact_types`): `PACIENTE -> P`, `MEDICO -> M`, `DISTRIBUIDOR -> D`, `TRABAJO -> T`, `CLIENTE DIVERSO -> CD`.
+- La conversion DEBE ser bidireccional: HubSpot -> ASPEL envia el codigo y ASPEL -> HubSpot restaura el valor interno de la enumeracion. Un valor desconocido no debe escribirse en destino.
 
 ## 9.6.3 Polling de Contactos ASPEL -> HubSpot por `VERSION_SINC`
 
@@ -594,6 +597,8 @@ El sistema DEBE aplicar controles de rate limit de forma explicita para evitar b
 - Inicio por `deal.propertyChange`, propiedad `dealstage`, valores `1316578321`, `1160755464`, `1316741897`, `1316738978`.
 - Flujo asincrono: cambio de etapa -> `prepareAspelQuote` -> `createQuote` -> `syncQuoteExecutionResponse`.
 - Resolver un unico contacto principal por categoria/tipo configurables; usar sus datos de cliente y fiscales. Resolver una unica cotizacion candidata y sus propias partidas; no elegir arbitrariamente entre varias.
+- La cotizacion candidata debe estar publicada (`hs_last_published_date`) dentro de las ultimas 24 horas; no se requiere firma para enviarla a ASPEL SAE.
+- Excluir cotizaciones en proceso, sincronizadas, ya existentes, con error de negocio previamente procesado o con cualquier identificador SAE (`aspel_cve_doc`, `aspel_folio`, `aspel_serie`).
 - Mappings por evento, claves `contact.properties.*`, `quote.properties.*`, `line_item.properties.*` y `contact_name`; meta.scope `header` o `line_item`.
 - Reconsultar precios por cliente, articulo y almacen antes de emitir. Bloquear diferencias con lista esperada/partida o listas con impuestos incluidos; no corregir precios automaticamente.
 - Direccion obligatoria sin defaults ficticios; IVA y hubspotLineItemId opcionales. Serializar camposLibres vacio como objeto JSON.

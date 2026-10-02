@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Event;
+use App\Models\EventTriggerGroup;
 use App\Models\Platform;
 use App\Models\Property;
 use App\Models\PropertyRelationship;
@@ -37,10 +38,26 @@ class AspelQuoteFlowSeeder extends Seeder
                     'customer_clave_property' => 'clave',
                 ], 'active' => true,
             ]);
-            if (! isset($prepare->meta['mapping_context'])) {
-                $prepare->update(['meta' => array_merge($prepare->meta ?? [], ['mapping_context' => [
-                    'source_platform_ids' => [$hubspot->id], 'target_platform_id' => $create->platform_id,
-                ]])]);
+            $prepareMeta = array_merge([
+                'object_type' => 'quotes',
+                'warehouse_event_id' => $warehouse->id,
+                'primary_contact_association_type_id' => 1,
+                'primary_contact_association_category' => 'USER_DEFINED',
+                'customer_clave_property' => 'clave',
+                'quote_published_at_property' => 'hs_last_published_date',
+                'quote_lookback_hours' => 24,
+                'quote_sync_status_property' => 'sync_status_aspel',
+                'quote_last_sync_property' => 'last_sync_aspel',
+                'quote_last_error_property' => 'last_error_aspel',
+                'quote_external_id_properties' => ['aspel_cve_doc', 'aspel_folio', 'aspel_serie'],
+                'mapping_context' => [
+                    'source_platform_ids' => [$hubspot->id],
+                    'target_platform_id' => $create->platform_id,
+                ],
+            ], $prepare->meta ?? []);
+            unset($prepareMeta['quote_external_id_property']);
+            if ($prepareMeta !== ($prepare->meta ?? [])) {
+                $prepare->update(['meta' => $prepareMeta]);
             }
             $trigger = Event::firstOrCreate(['platform_id' => $hubspot->id, 'name' => 'Enviar cotizacion SAE por etapa de negocio'], [
                 'method_name' => 'dealPropertyChange', 'event_type_id' => 'deal.propertyChange', 'type' => 'webhook',
@@ -49,7 +66,7 @@ class AspelQuoteFlowSeeder extends Seeder
             ]);
             $stage = $this->property($hubspot->id, 'dealstage', 'string', 'deals');
             $trigger->properties()->syncWithoutDetaching([$stage->id]);
-            if (! $trigger->eventTriggers()->exists() && ! \App\Models\EventTriggerGroup::where('event_id', $trigger->id)->exists()) {
+            if (! $trigger->eventTriggers()->exists() && ! EventTriggerGroup::where('event_id', $trigger->id)->exists()) {
                 app(EventTriggerService::class)->syncEventTriggers($trigger, [
                     ['name' => 'Cambio de etapa', 'operator' => 'and', 'active' => true, 'conditions' => [
                         ['field' => 'propertyName', 'operator' => 'equals', 'value' => 'dealstage'],
@@ -125,6 +142,7 @@ class AspelQuoteFlowSeeder extends Seeder
         $query = Property::where('platform_id', $platformId)->where('key', $key);
         $existing = (clone $query)->where('meta->hubspot_object_type', $object)->first()
             ?? (clone $query)->whereNull('meta->hubspot_object_type')->first();
+
         return $existing ?? Property::create([
             'platform_id' => $platformId, 'key' => $key, 'name' => $key, 'type' => $type,
             'active' => true, 'meta' => ['hubspot_object_type' => $object],

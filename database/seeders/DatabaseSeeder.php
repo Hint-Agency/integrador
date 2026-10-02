@@ -5,8 +5,8 @@ namespace Database\Seeders;
 use App\Models\Role;
 use App\Models\User;
 // use Illuminate\Database\Console\Seeds\WithoutModelEvents;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
 {
@@ -20,6 +20,7 @@ class DatabaseSeeder extends Seeder
         $this->call(AzureSqlProductPropertiesSeeder::class);
         $this->call(AspelWarehouseMappingsSeeder::class);
         $this->call(AspelQuoteFlowSeeder::class);
+        $this->call(AspelContactCatalogSeeder::class);
 
         $admin = User::query()->firstOrCreate(
             ['email' => env('ADMIN_EMAIL', 'admin@example.com')],

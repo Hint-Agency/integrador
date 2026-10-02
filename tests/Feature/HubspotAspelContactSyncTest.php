@@ -82,6 +82,7 @@ class HubspotAspelContactSyncTest extends TestCase
                 && ($properties['phone'] ?? null) === '5551234567'
                 && ($properties['rfc'] ?? null) === 'LOMJ850214H12'
                 && ($properties['clave'] ?? null) === '50902'
+                && ($properties['tipo_cliente'] ?? null) === 'PACIENTE'
                 && ($properties['fecha_alta'] ?? null) === Carbon::parse('2026-09-01T00:00:00')->utc()->getTimestampMs()
                 && ($properties['sync_status_aspel'] ?? null) === 'success'
                 && ($properties['last_error_aspel'] ?? null) === ''
@@ -262,6 +263,13 @@ class HubspotAspelContactSyncTest extends TestCase
             'name' => 'ASPEL',
             'slug' => 'aspel',
             'type' => 'generic',
+            'settings' => [
+                'aspel' => [
+                    'catalogs' => [
+                        'contact_types' => ['PACIENTE' => 'P'],
+                    ],
+                ],
+            ],
             'active' => true,
         ]);
 
@@ -319,6 +327,7 @@ class HubspotAspelContactSyncTest extends TestCase
             'rfc' => 'RFC',
             'clave' => 'Clave',
             'fecha_alta' => 'Fecha alta',
+            'tipo_cliente' => 'Tipo cliente',
             'version_sinc_aspel' => 'Version sinc ASPEL',
         ];
 
@@ -329,6 +338,7 @@ class HubspotAspelContactSyncTest extends TestCase
             'rfc' => 'RFC',
             'clave' => 'Clave',
             'fechaAlta' => 'Fecha alta',
+            'tipoEmpresa' => 'Tipo empresa',
         ];
 
         $createdHubspotProperties = [];
@@ -378,6 +388,21 @@ class HubspotAspelContactSyncTest extends TestCase
             'active' => true,
         ]);
 
+        PropertyRelationship::query()->create([
+            'event_id' => $mappingEvent->id,
+            'property_id' => $createdHubspotProperties['tipo_cliente']->id,
+            'related_property_id' => $createdAspelProperties['tipoEmpresa']->id,
+            'meta' => [
+                'catalog' => [
+                    'platform' => 'target',
+                    'path' => 'aspel.catalogs.contact_types',
+                    'match' => 'key',
+                    'output' => 'value',
+                ],
+            ],
+            'active' => true,
+        ]);
+
         return [$hubspotPlatform, $aspelPlatform, $mappingEvent, $syncEvent, $record];
     }
 
@@ -399,6 +424,7 @@ class HubspotAspelContactSyncTest extends TestCase
                 'telefono' => '5551234567',
                 'emailEnvio' => 'juan.lopez@example.com',
                 'fechaAlta' => '2026-09-01T00:00:00',
+                'tipoEmpresa' => 'P',
                 'status' => 'A',
             ],
         ];

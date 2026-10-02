@@ -21,22 +21,31 @@ class AspelQuotePreparationService
             return $this->blocked($api, $dealId, 'quote_associations_failed', $quotes);
         }
         $candidates = [];
+        $excludedQuotes = [];
         $attemptedQuoteIds = $this->attemptedQuoteIds($event);
         foreach (array_unique(array_column($quotes['items'], 'toObjectId')) as $id) {
-            $result = $api->getObject('quotes', (string) $id, $this->properties($event, 'quote', [
-                'sync_status_aspel', 'last_sync_aspel', 'aspel_cve_doc', 'hs_createdate',
-            ]));
+            $result = $api->getObject(
+                'quotes',
+                (string) $id,
+                $this->properties($event, 'quote', $this->quoteEligibilityProperties($event))
+            );
             if (! ($result['success'] ?? false)) {
                 return $this->blocked($api, $dealId, 'quote_fetch_failed', $result);
             }
             $quote = $result['data'];
-            if ($this->wasAlreadyProcessed($quote, (string) $id, $attemptedQuoteIds)) {
+            $exclusionReason = $this->quoteExclusionReason($event, $quote, (string) $id, $attemptedQuoteIds);
+            if ($exclusionReason !== null) {
+                $excludedQuotes[(string) $id] = $exclusionReason;
+
                 continue;
             }
             $candidates[(string) $id] = $quote;
         }
         if (count($candidates) !== 1) {
-            return $this->blocked($api, $dealId, 'missing_or_ambiguous_quote', ['candidate_ids' => array_keys($candidates)]);
+            return $this->blocked($api, $dealId, 'missing_or_ambiguous_quote', [
+                'candidate_ids' => array_keys($candidates),
+                'excluded_quotes' => $excludedQuotes,
+            ]);
         }
         $quoteId = (string) array_key_first($candidates);
         $quote = $candidates[$quoteId];
@@ -82,8 +91,7 @@ class AspelQuotePreparationService
             $pricing = $warehouse->getProductWarehouses(['sku' => $partida['cveArt'], 'query' => [
                 'claveCliente' => $header['claveCliente'] ?? '', 'cveAlmacen' => $partida['cveAlmacen'],
             ]]);
-            $matches = array_values(array_filter((array) ($pricing['data'] ?? []), static fn ($record): bool =>
-                is_array($record) && (string) ($record['cveAlm'] ?? '') === (string) $partida['cveAlmacen']));
+            $matches = array_values(array_filter((array) ($pricing['data'] ?? []), static fn ($record): bool => is_array($record) && (string) ($record['cveAlm'] ?? '') === (string) $partida['cveAlmacen']));
             if (! ($pricing['success'] ?? false) || count($matches) !== 1) {
                 return $this->blocked($api, $dealId, 'warehouse_pricing_failed', ['line_item_id' => $lineId, 'response' => $pricing], $quoteId);
             }
@@ -115,6 +123,7 @@ class AspelQuotePreparationService
                     $fields[$mapping->relatedProperty->key] = $mapping->mapping_key;
                 }
             }
+
             return $this->blocked($api, $dealId, 'invalid_quote_data', [
                 'contact_id' => $contactId, 'errors' => $validation['errors'], 'source_fields' => $fields,
             ], $quoteId);
@@ -123,6 +132,7 @@ class AspelQuotePreparationService
         if (! ($update['success'] ?? false)) {
             return $this->blocked($api, $dealId, 'quote_status_write_failed', $update, $quoteId);
         }
+
         return ['success' => true, 'data' => ['output_payload' => array_merge($validation['payload'], [
             'hubspot_object_id' => $quoteId, 'hubspot_object_type' => 'quotes', 'source_event_id' => $event->id,
         ])]];
@@ -136,6 +146,7 @@ class AspelQuotePreparationService
                 $extra[] = substr($mapping->mapping_key, strlen($prefix));
             }
         }
+
         return array_values(array_unique($extra));
     }
 
@@ -149,6 +160,7 @@ class AspelQuotePreparationService
                 Arr::set($result, $key, Arr::get($transformed, $key));
             }
         }
+
         return $result;
     }
 
@@ -166,6 +178,7 @@ class AspelQuotePreparationService
         $note = $api->addNoteToObject('deals', $dealId,
             '[Integrador ASPEL] Cotizacion bloqueada: '.$reason."\n".json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
             .($technical ? "\nFallo transitorio: reintentar con los mismos IDs." : "\nCorregir los datos y generar una nueva cotizacion."));
+
         return ['success' => ! $technical, 'status' => 'warning', 'message' => 'ASPEL quote blocked: '.$reason, 'data' => [
             'reason' => $reason, 'retryable' => $technical, 'context' => $details, 'hubspot_note' => $note, 'status_update' => $statusUpdate, 'output_payload' => [],
         ]];
@@ -185,6 +198,7 @@ class AspelQuotePreparationService
                 return true;
             }
         }
+
         return false;
     }
 
@@ -207,29 +221,64 @@ class AspelQuotePreparationService
         return $ids;
     }
 
-    private function wasAlreadyProcessed(array $quote, string $quoteId, array $attemptedQuoteIds): bool
+    /**
+     * @return list<string>
+     */
+    private function quoteEligibilityProperties(Event $event): array
     {
-        $status = trim((string) Arr::get($quote, 'properties.sync_status_aspel', ''));
-        if (in_array($status, ['success', 'already_exists'], true)
-            || trim((string) Arr::get($quote, 'properties.aspel_cve_doc', '')) !== '') {
-            return true;
+        $meta = $event->meta ?? [];
+        $externalIdProperties = $this->quoteExternalIdProperties($event);
+
+        return array_values(array_unique(array_merge([
+            (string) ($meta['quote_published_at_property'] ?? 'hs_last_published_date'),
+            (string) ($meta['quote_sync_status_property'] ?? 'sync_status_aspel'),
+            (string) ($meta['quote_last_sync_property'] ?? 'last_sync_aspel'),
+            (string) ($meta['quote_last_error_property'] ?? 'last_error_aspel'),
+            'hs_createdate',
+        ], $externalIdProperties)));
+    }
+
+    private function quoteExclusionReason(Event $event, array $quote, string $quoteId, array $attemptedQuoteIds): ?string
+    {
+        $meta = $event->meta ?? [];
+        $publishedProperty = (string) ($meta['quote_published_at_property'] ?? 'hs_last_published_date');
+        $publishedAt = Arr::get($quote, 'properties.'.$publishedProperty);
+        $lookbackHours = max(1, (int) ($meta['quote_lookback_hours'] ?? 24));
+        $published = $this->parseHubspotDate($publishedAt);
+        if ($published === null) {
+            return 'not_published';
+        }
+        if ($published->lt(now()->subHours($lookbackHours)) || $published->gt(now()->addMinutes(5))) {
+            return 'outside_publication_window';
+        }
+
+        $statusProperty = (string) ($meta['quote_sync_status_property'] ?? 'sync_status_aspel');
+        $lastSyncProperty = (string) ($meta['quote_last_sync_property'] ?? 'last_sync_aspel');
+        $status = strtolower(trim((string) Arr::get($quote, 'properties.'.$statusProperty, '')));
+        if (in_array($status, ['processing', 'success', 'already_exists'], true)) {
+            return 'sync_status_'.$status;
+        }
+        foreach ($this->quoteExternalIdProperties($event) as $externalIdProperty) {
+            if (trim((string) Arr::get($quote, 'properties.'.$externalIdProperty, '')) !== '') {
+                return 'aspel_document_already_assigned';
+            }
         }
         if ($status !== 'error') {
-            return false;
+            return null;
         }
         if (isset($attemptedQuoteIds[$quoteId])) {
-            return true;
+            return 'previous_business_error';
         }
 
         $createdAt = Arr::get($quote, 'properties.hs_createdate') ?? ($quote['createdAt'] ?? null);
-        $lastSync = Arr::get($quote, 'properties.last_sync_aspel');
+        $lastSync = Arr::get($quote, 'properties.'.$lastSyncProperty);
         if (! is_scalar($createdAt) || trim((string) $createdAt) === '') {
-            return true;
+            return 'error_without_creation_date';
         }
         if (! is_scalar($lastSync) || trim((string) $lastSync) === '') {
             // HubSpot copies custom quote properties. An error without a matching local
             // attempt is therefore treated as inherited by a newly-created quote.
-            return false;
+            return null;
         }
 
         try {
@@ -238,9 +287,50 @@ class AspelQuotePreparationService
                 ? Carbon::createFromTimestampMs((int) $lastSync)
                 : Carbon::parse((string) $lastSync);
 
-            return ! $created->greaterThan($synced);
+            return $created->greaterThan($synced) ? null : 'previous_business_error';
         } catch (\Throwable) {
-            return true;
+            return 'invalid_technical_dates';
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function quoteExternalIdProperties(Event $event): array
+    {
+        $configured = $event->meta['quote_external_id_properties'] ?? null;
+        if (! is_array($configured) || $configured === []) {
+            $configured = [
+                $event->meta['quote_external_id_property'] ?? 'aspel_cve_doc',
+                'aspel_folio',
+                'aspel_serie',
+            ];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn ($property): string => is_scalar($property) ? trim((string) $property) : '',
+            $configured
+        ))));
+    }
+
+    private function parseHubspotDate(mixed $value): ?Carbon
+    {
+        if (! is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            if (is_numeric($value)) {
+                $numeric = (int) $value;
+
+                return abs($numeric) >= 100000000000
+                    ? Carbon::createFromTimestampMs($numeric)
+                    : Carbon::createFromTimestamp($numeric);
+            }
+
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
         }
     }
 }
