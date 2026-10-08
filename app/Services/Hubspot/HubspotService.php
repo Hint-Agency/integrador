@@ -3193,12 +3193,14 @@ class HubspotService extends BaseService
             if ($this->applyHubspotConstantMapping($relationship, $properties)) {
                 continue;
             }
-            $hubspotKey = $relationship->property?->key ?: $relationship->property?->name;
-            $sourceKey = $relationship->relatedProperty?->key ?: $relationship->relatedProperty?->name;
 
-            if (! is_string($hubspotKey) || trim($hubspotKey) === '' || ! is_string($sourceKey) || trim($sourceKey) === '') {
+            $direction = $this->resolveAspelInboundMappingDirection($mappingEvent, $relationship);
+            if ($direction === null) {
                 continue;
             }
+
+            $hubspotKey = $direction['hubspot_key'];
+            $sourceKey = $direction['source_key'];
 
             $sourceExists = Arr::has($sourceData, $sourceKey)
                 || (is_array($nestedData) && Arr::has($nestedData, $sourceKey));
@@ -3232,7 +3234,7 @@ class HubspotService extends BaseService
                 $mappingEvent,
                 $relationship,
                 $value,
-                true
+                $direction['reverse_catalog']
             );
             if (! ($catalogValue['matched'] ?? false)) {
                 continue;
@@ -3246,6 +3248,54 @@ class HubspotService extends BaseService
         $this->recordMappingDefaultsApplied($defaultsApplied);
 
         return $properties;
+    }
+
+    /**
+     * @return array{hubspot_key:string,source_key:string,reverse_catalog:bool}|null
+     */
+    private function resolveAspelInboundMappingDirection(
+        Event $mappingEvent,
+        PropertyRelationship $relationship
+    ): ?array {
+        $source = $relationship->property;
+        $target = $relationship->relatedProperty;
+        if (! $source || ! $target) {
+            return null;
+        }
+
+        $isDirect = (int) $source->platform_id === (int) $mappingEvent->platform_id
+            && (int) $target->platform_id === (int) $this->platform->id;
+
+        if ($isDirect) {
+            $sourceKey = $source->key ?: $source->name;
+            $hubspotKey = $target->key ?: $target->name;
+
+            return is_string($sourceKey) && trim($sourceKey) !== ''
+                && is_string($hubspotKey) && trim($hubspotKey) !== ''
+                ? [
+                    'hubspot_key' => trim($hubspotKey),
+                    'source_key' => trim($sourceKey),
+                    'reverse_catalog' => false,
+                ]
+                : null;
+        }
+
+        $isLegacyReverse = (int) $source->platform_id === (int) $this->platform->id;
+        if (! $isLegacyReverse) {
+            return null;
+        }
+
+        $hubspotKey = $source->key ?: $source->name;
+        $sourceKey = $target->key ?: $target->name;
+
+        return is_string($sourceKey) && trim($sourceKey) !== ''
+            && is_string($hubspotKey) && trim($hubspotKey) !== ''
+            ? [
+                'hubspot_key' => trim($hubspotKey),
+                'source_key' => trim($sourceKey),
+                'reverse_catalog' => true,
+            ]
+            : null;
     }
 
     private function applyHubspotConstantMapping(PropertyRelationship $relationship, array &$properties): bool

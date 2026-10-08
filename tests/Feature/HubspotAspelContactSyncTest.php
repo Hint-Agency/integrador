@@ -289,7 +289,8 @@ class HubspotAspelContactSyncTest extends TestCase
             'type' => 'webhook',
             'meta' => [
                 'object_type' => 'contacts',
-                'target_platform' => 'aspel',
+                'source_platform' => 'aspel',
+                'target_platform' => 'hubspot',
                 'response_mapping_event_id' => $mappingEvent->id,
                 'version_sinc_property' => 'version_sinc_aspel',
             ],
@@ -305,7 +306,8 @@ class HubspotAspelContactSyncTest extends TestCase
             'type' => 'webhook',
             'meta' => [
                 'object_type' => 'contacts',
-                'target_platform' => 'aspel',
+                'source_platform' => 'aspel',
+                'target_platform' => 'hubspot',
                 'response_mapping_event_id' => $mappingEvent->id,
                 'version_sinc_property' => 'version_sinc_aspel',
             ],
@@ -372,16 +374,16 @@ class HubspotAspelContactSyncTest extends TestCase
         ] as $hubspotKey => $aspelKey) {
             PropertyRelationship::query()->create([
                 'event_id' => $mappingEvent->id,
-                'property_id' => $createdHubspotProperties[$hubspotKey]->id,
-                'related_property_id' => $createdAspelProperties[$aspelKey]->id,
+                'property_id' => $createdAspelProperties[$aspelKey]->id,
+                'related_property_id' => $createdHubspotProperties[$hubspotKey]->id,
                 'active' => true,
             ]);
         }
 
         PropertyRelationship::query()->create([
             'event_id' => $mappingEvent->id,
-            'property_id' => $createdHubspotProperties['fecha_alta']->id,
-            'related_property_id' => $createdAspelProperties['fechaAlta']->id,
+            'property_id' => $createdAspelProperties['fechaAlta']->id,
+            'related_property_id' => $createdHubspotProperties['fecha_alta']->id,
             'meta' => [
                 'transform' => 'hubspot_datetime_to_millis',
             ],
@@ -390,14 +392,14 @@ class HubspotAspelContactSyncTest extends TestCase
 
         PropertyRelationship::query()->create([
             'event_id' => $mappingEvent->id,
-            'property_id' => $createdHubspotProperties['tipo_cliente']->id,
-            'related_property_id' => $createdAspelProperties['tipoEmpresa']->id,
+            'property_id' => $createdAspelProperties['tipoEmpresa']->id,
+            'related_property_id' => $createdHubspotProperties['tipo_cliente']->id,
             'meta' => [
                 'catalog' => [
-                    'platform' => 'target',
+                    'platform' => 'source',
                     'path' => 'aspel.catalogs.contact_types',
-                    'match' => 'key',
-                    'output' => 'value',
+                    'match' => 'value',
+                    'output' => 'key',
                 ],
             ],
             'active' => true,

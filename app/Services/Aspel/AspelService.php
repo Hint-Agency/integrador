@@ -31,6 +31,8 @@ class AspelService extends GenericPlatformService
 
     private const DETAIL_NOT_FOUND_RETRY_BACKOFF_SECONDS = [1, 3];
 
+    private const ALLOWED_CONTACT_STATUSES = ['A', 'B', 'S', 'M'];
+
     /**
      * @var list<string>
      */
@@ -81,16 +83,82 @@ class AspelService extends GenericPlatformService
 
     public function resolveBody(Event $event, array $payload): array
     {
+        $hubspotObjectId = $this->resolveHubspotObjectId($payload);
         $body = parent::resolveBody($event, $payload);
+
+        $mappedContactKeys = $this->mappedContactDestinationKeys($event);
+        if ($mappedContactKeys !== []) {
+            $body = Arr::only($body, $mappedContactKeys);
+        }
 
         foreach (self::TECHNICAL_KEYS as $key) {
             Arr::forget($body, $key);
+        }
+
+        foreach (['CAMPLIB19', 'CAMPLIB20', 'camplib19', 'camplib20'] as $internalAspelField) {
+            Arr::forget($body, $internalAspelField);
+        }
+
+        if ($hubspotObjectId !== null) {
+            $body['hubspotObjectId'] = $hubspotObjectId;
         }
 
         return array_filter(
             $body,
             static fn (mixed $value): bool => $value !== null
         );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function mappedContactDestinationKeys(Event $event): array
+    {
+        $method = $this->resolveOperationMethod();
+        $isContactWrite = in_array($method, [
+            'createContact',
+            'updateContact',
+            'updateContactWithLookup',
+            'upsertContact',
+        ], true);
+
+        if (! $isContactWrite) {
+            try {
+                $isContactWrite = preg_match('~/contacts(?:/|$)~i', $this->resolveEndpoint($event)) === 1;
+            } catch (\Throwable) {
+                $isContactWrite = false;
+            }
+        }
+
+        if (! $isContactWrite) {
+            return [];
+        }
+
+        $current = $event;
+        $visited = [];
+        while ($current && ! in_array($current->id, $visited, true)) {
+            $visited[] = $current->id;
+            $keys = $current->propertyRelationships()
+                ->with('relatedProperty')
+                ->where('active', true)
+                ->whereHas('relatedProperty', fn ($query) => $query->where('platform_id', $this->platform->id))
+                ->get()
+                ->map(fn ($relationship) => $relationship->relatedProperty?->key
+                    ?: $relationship->relatedProperty?->name)
+                ->filter(fn ($key) => is_string($key) && trim($key) !== '')
+                ->map(fn (string $key) => trim($key))
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($keys !== []) {
+                return $keys;
+            }
+
+            $current = Event::query()->where('to_event_id', $current->id)->first();
+        }
+
+        return [];
     }
 
     public function createContact(array $payload, ?GenericHttpAdapter $httpAdapter = null): array
@@ -368,6 +436,22 @@ class AspelService extends GenericPlatformService
         $lookupResponse = $this->findContact($payload, $httpAdapter);
         $this->logAspelLookupResult($lookupCriteria, $lookupResponse, $payload);
 
+        if ($this->isLookupConflictResponse($lookupResponse)) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => 'ASPEL contact lookup returned an ambiguous conflict that requires review.',
+                'data' => [
+                    'updated_count' => 0,
+                    'not_found_count' => 0,
+                    'warning_reason' => array_key_exists('rfc', $lookupCriteria) ? 'ambiguous_rfc' : 'lookup_conflict',
+                    'lookup_criteria' => $lookupCriteria,
+                    'lookup_response' => $lookupResponse,
+                    'output_payload' => [],
+                ],
+            ];
+        }
+
         if (! ($lookupResponse['success'] ?? false) && ! $this->isLookupNotFoundResponse($lookupResponse)) {
             return [
                 'success' => false,
@@ -502,6 +586,11 @@ class AspelService extends GenericPlatformService
         return str_contains(Str::lower($message), 'contact not found');
     }
 
+    private function isLookupConflictResponse(array $lookupResponse): bool
+    {
+        return (int) Arr::get($lookupResponse, 'status_code', 0) === 409;
+    }
+
     public function getUpdatedContacts(array $payload = [], ?GenericHttpAdapter $httpAdapter = null): array
     {
         if (! $this->event) {
@@ -523,6 +612,7 @@ class AspelService extends GenericPlatformService
 
         $take = max(1, (int) ($this->event->meta['take'] ?? Arr::get($payload, 'take', self::DEFAULT_CHANGES_TAKE)));
         $cursor = $this->loadCursorState();
+        $overlapMinutes = $this->resolvePollingOverlapMinutes();
         $runStartedAt = now()->toISOString();
         $metrics = [
             'take' => $take,
@@ -531,6 +621,7 @@ class AspelService extends GenericPlatformService
             'items_processed' => 0,
             'items_skipped' => 0,
             'items_failed' => 0,
+            'overlap_minutes' => $overlapMinutes,
         ];
 
         $this->persistRunState([
@@ -539,10 +630,11 @@ class AspelService extends GenericPlatformService
             'last_error' => null,
         ]);
 
-        $currentCursor = [
+        $persistedCursor = [
             'sinceTs' => $cursor['sinceTs'],
             'sinceClave' => $cursor['sinceClave'],
         ];
+        $currentCursor = $this->applyPollingOverlap($persistedCursor, $overlapMinutes);
         $failedItems = [];
 
         try {
@@ -693,8 +785,11 @@ class AspelService extends GenericPlatformService
                     'sinceTs' => $nextSinceTs ?: $currentCursor['sinceTs'],
                     'sinceClave' => $nextSinceClave ?: $currentCursor['sinceClave'],
                 ];
+                $persistedCursor = $overlapMinutes > 0
+                    ? $this->laterCursor($persistedCursor, $currentCursor)
+                    : $currentCursor;
 
-                $this->persistCursorState($currentCursor);
+                $this->persistCursorState($persistedCursor);
             } while ($hasMore);
         } catch (\Throwable $exception) {
             return $this->failPollingRun(
@@ -717,8 +812,8 @@ class AspelService extends GenericPlatformService
 
         $data = [
             'cursor' => [
-                'sinceTs' => $currentCursor['sinceTs'],
-                'sinceClave' => $currentCursor['sinceClave'],
+                'sinceTs' => $persistedCursor['sinceTs'],
+                'sinceClave' => $persistedCursor['sinceClave'],
             ],
             'metrics' => $metrics,
             'last_run_started_at' => $runStartedAt,
@@ -760,6 +855,7 @@ class AspelService extends GenericPlatformService
 
         $take = max(1, (int) ($this->event->meta['take'] ?? Arr::get($payload, 'take', self::DEFAULT_CHANGES_TAKE)));
         $cursor = $this->loadCursorStateForScope('products');
+        $overlapMinutes = $this->resolvePollingOverlapMinutes();
         $runStartedAt = now()->toISOString();
         Log::info('Starting ASPEL product change polling run', [
             'take' => $take,
@@ -775,6 +871,7 @@ class AspelService extends GenericPlatformService
             'items_processed' => 0,
             'items_skipped' => 0,
             'items_failed' => 0,
+            'overlap_minutes' => $overlapMinutes,
         ];
 
         $this->persistRunStateForScope('products', [
@@ -783,10 +880,11 @@ class AspelService extends GenericPlatformService
             'last_error' => null,
         ]);
 
-        $currentCursor = [
+        $persistedCursor = [
             'sinceTs' => $cursor['sinceTs'],
             'sinceClave' => $cursor['sinceClave'],
         ];
+        $currentCursor = $this->applyPollingOverlap($persistedCursor, $overlapMinutes);
         $failedItems = [];
 
         try {
@@ -940,8 +1038,11 @@ class AspelService extends GenericPlatformService
                     'sinceTs' => $nextSinceTs ?: $currentCursor['sinceTs'],
                     'sinceClave' => $nextSinceClave ?: $currentCursor['sinceClave'],
                 ];
+                $persistedCursor = $overlapMinutes > 0
+                    ? $this->laterCursor($persistedCursor, $currentCursor)
+                    : $currentCursor;
 
-                $this->persistCursorStateForScope('products', $currentCursor);
+                $this->persistCursorStateForScope('products', $persistedCursor);
             } while ($hasMore);
         } catch (\Throwable $exception) {
             return $this->failPollingRunForScope(
@@ -965,8 +1066,8 @@ class AspelService extends GenericPlatformService
 
         $data = [
             'cursor' => [
-                'sinceTs' => $currentCursor['sinceTs'],
-                'sinceClave' => $currentCursor['sinceClave'],
+                'sinceTs' => $persistedCursor['sinceTs'],
+                'sinceClave' => $persistedCursor['sinceClave'],
             ],
             'metrics' => $metrics,
             'last_run_started_at' => $runStartedAt,
@@ -1156,7 +1257,7 @@ class AspelService extends GenericPlatformService
             ];
         }
 
-        $validation = $this->normalizeContactPayload($payload);
+        $validation = $this->normalizeContactPayload($payload, $operation);
         if (! $validation['valid']) {
             return [
                 'success' => false,
@@ -1350,9 +1451,44 @@ class AspelService extends GenericPlatformService
     /**
      * @return array{valid:bool,payload:array<string,mixed>,errors:array<string,list<string>>}
      */
-    private function normalizeContactPayload(array $payload): array
+    private function normalizeContactPayload(array $payload, string $operation): array
     {
         $errors = [];
+
+        $hubspotObjectId = $this->resolveHubspotObjectId($payload);
+        if ($hubspotObjectId !== null) {
+            if (mb_strlen($hubspotObjectId) > 50) {
+                $errors['hubspotObjectId'][] = 'The hubspotObjectId field may not be greater than 50 characters.';
+            } else {
+                $payload['hubspotObjectId'] = $hubspotObjectId;
+            }
+        }
+
+        if ($operation === 'create' && ! array_key_exists('saldo', $payload)) {
+            $errors['saldo'][] = 'The saldo field is required when creating an ASPEL contact.';
+        }
+
+        if (array_key_exists('saldo', $payload)) {
+            $saldo = $payload['saldo'];
+            if (! is_scalar($saldo) || ! is_numeric(trim((string) $saldo))) {
+                $errors['saldo'][] = 'The saldo field must be numeric.';
+            } else {
+                $payload['saldo'] = (float) $saldo;
+            }
+        }
+
+        if ($operation === 'create' && ! array_key_exists('status', $payload)) {
+            $errors['status'][] = 'The status field is required when creating an ASPEL contact.';
+        }
+
+        if (array_key_exists('status', $payload)) {
+            $status = is_scalar($payload['status']) ? Str::upper(trim((string) $payload['status'])) : '';
+            if (! in_array($status, self::ALLOWED_CONTACT_STATUSES, true)) {
+                $errors['status'][] = 'The status field must be one of: A, B, S, M.';
+            } else {
+                $payload['status'] = $status;
+            }
+        }
 
         if (array_key_exists('invalido', $payload)) {
             $value = $payload['invalido'];
@@ -1393,6 +1529,17 @@ class AspelService extends GenericPlatformService
             'payload' => $payload,
             'errors' => $errors,
         ];
+    }
+
+    private function resolveHubspotObjectId(array $payload): ?string
+    {
+        return $this->resolveScalarValue([
+            Arr::get($payload, 'hubspot_object_id'),
+            Arr::get($payload, 'hubspot_contact_id'),
+            Arr::get($payload, 'hs_object_id'),
+            Arr::get($payload, 'objectId'),
+            Arr::get($payload, 'hubspotObjectId'),
+        ]);
     }
 
     private function normalizeAspelDate(mixed $value): ?string
@@ -1780,6 +1927,7 @@ class AspelService extends GenericPlatformService
             }
             if (! is_finite((float) $value)) {
                 $errors[$path.'.'.$field][] = 'A finite number is required.';
+
                 continue;
             }
             if (in_array($field, ['cveAlmacen', 'listaPrecio'], true)
@@ -1933,6 +2081,61 @@ class AspelService extends GenericPlatformService
         }
 
         return self::DEFAULT_INITIAL_LOOKBACK_HOURS * 60;
+    }
+
+    private function resolvePollingOverlapMinutes(): int
+    {
+        $minutes = Arr::get($this->event?->meta ?? [], 'overlap_minutes', 0);
+
+        return is_numeric($minutes) ? max(0, (int) ceil((float) $minutes)) : 0;
+    }
+
+    /**
+     * Rewinds only the request cursor. The durable cursor never moves backwards.
+     */
+    private function applyPollingOverlap(array $cursor, int $overlapMinutes): array
+    {
+        if ($overlapMinutes === 0) {
+            return $cursor;
+        }
+
+        try {
+            return [
+                'sinceTs' => Carbon::parse((string) $cursor['sinceTs'])->subMinutes($overlapMinutes)->toISOString(),
+                'sinceClave' => '',
+            ];
+        } catch (\Throwable $exception) {
+            Log::warning('Unable to apply ASPEL polling overlap to cursor.', [
+                'event_id' => $this->event?->id,
+                'cursor' => $cursor,
+                'overlap_minutes' => $overlapMinutes,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return $cursor;
+        }
+    }
+
+    private function laterCursor(array $current, array $candidate): array
+    {
+        try {
+            $currentTimestamp = Carbon::parse((string) ($current['sinceTs'] ?? ''));
+            $candidateTimestamp = Carbon::parse((string) ($candidate['sinceTs'] ?? ''));
+
+            if ($candidateTimestamp->gt($currentTimestamp)) {
+                return $candidate;
+            }
+
+            if ($candidateTimestamp->lt($currentTimestamp)) {
+                return $current;
+            }
+
+            return strcmp((string) ($candidate['sinceClave'] ?? ''), (string) ($current['sinceClave'] ?? '')) > 0
+                ? $candidate
+                : $current;
+        } catch (\Throwable) {
+            return $current;
+        }
     }
 
     private function persistCursorStateForScope(string $scope, array $cursor): void

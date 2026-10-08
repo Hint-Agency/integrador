@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Models\Event;
 use App\Models\EventHttpConfig;
 use App\Models\Platform;
+use App\Models\Property;
+use App\Models\PropertyRelationship;
 use App\Services\Aspel\AspelService;
 use App\Services\EventProcessingService;
 use App\Services\Generic\AuthStrategyResolver;
@@ -86,6 +88,80 @@ class AspelServiceTest extends TestCase
             'nombre' => 'Demo Integrador',
             'rfc' => 'RFC123',
             'clave' => '50900',
+            'hubspotObjectId' => '208589143093',
+        ], $body);
+    }
+
+    public function test_contact_request_body_contains_only_mapped_destination_fields_and_technical_hubspot_id(): void
+    {
+        $hubspot = Platform::query()->create([
+            'name' => 'HubSpot', 'slug' => 'hubspot', 'type' => 'hubspot', 'active' => true,
+        ]);
+        $aspel = Platform::query()->create([
+            'name' => 'ASPEL', 'slug' => 'aspel', 'type' => 'generic',
+            'settings' => ['service_driver' => 'aspel'], 'active' => true,
+        ]);
+        $destination = Event::query()->create([
+            'platform_id' => $aspel->id, 'name' => 'Create ASPEL contact',
+            'event_type_id' => 'generic.external.call', 'method_name' => 'createContact',
+            'type' => 'node', 'active' => true,
+        ]);
+        $source = Event::query()->create([
+            'platform_id' => $hubspot->id, 'to_event_id' => $destination->id,
+            'name' => 'HubSpot contact trigger', 'event_type_id' => 'contact.propertyChange',
+            'type' => 'webhook', 'active' => true,
+        ]);
+        $sourceProperty = Property::query()->create([
+            'platform_id' => $hubspot->id, 'name' => 'First name', 'key' => 'firstname',
+            'type' => 'string', 'required' => false, 'active' => true,
+        ]);
+        $destinationProperty = Property::query()->create([
+            'platform_id' => $aspel->id, 'name' => 'Nombre', 'key' => 'nombre',
+            'type' => 'string', 'required' => false, 'active' => true,
+        ]);
+        $sourceBalance = Property::query()->create([
+            'platform_id' => $hubspot->id, 'name' => 'Saldo', 'key' => 'saldo',
+            'type' => 'decimal', 'required' => false, 'active' => true,
+        ]);
+        $destinationBalance = Property::query()->create([
+            'platform_id' => $aspel->id, 'name' => 'Saldo', 'key' => 'saldo',
+            'type' => 'decimal', 'required' => false, 'active' => true,
+        ]);
+        $aspelClave = Property::query()->create([
+            'platform_id' => $aspel->id, 'name' => 'Clave', 'key' => 'clave',
+            'type' => 'string', 'required' => false, 'active' => true,
+        ]);
+        $hubspotClave = Property::query()->create([
+            'platform_id' => $hubspot->id, 'name' => 'Clave', 'key' => 'clave',
+            'type' => 'string', 'required' => false, 'active' => true,
+        ]);
+        PropertyRelationship::query()->create([
+            'event_id' => $source->id, 'property_id' => $sourceProperty->id,
+            'related_property_id' => $destinationProperty->id, 'active' => true,
+        ]);
+        PropertyRelationship::query()->create([
+            'event_id' => $source->id, 'property_id' => $sourceBalance->id,
+            'related_property_id' => $destinationBalance->id, 'active' => true,
+        ]);
+        PropertyRelationship::query()->create([
+            'event_id' => $destination->id, 'property_id' => $aspelClave->id,
+            'related_property_id' => $hubspotClave->id, 'active' => true,
+        ]);
+        $service = new AspelService($aspel, app(AuthStrategyResolver::class), $destination);
+
+        $body = $service->resolveBody($destination, [
+            'firstname' => 'Maria',
+            'nombre' => 'Maria',
+            'saldo' => 1500.5,
+            'clave' => 'must-not-constrain-aspel-body',
+            'unmapped_business_field' => 'must-not-be-sent',
+            'hubspot_object_id' => '222593112068',
+        ]);
+
+        $this->assertSame([
+            'nombre' => 'Maria',
+            'saldo' => 1500.5,
+            'hubspotObjectId' => '222593112068',
         ], $body);
     }
 
@@ -162,6 +238,8 @@ class AspelServiceTest extends TestCase
 
         $response = $service->executeEndpointCall([
             'nombre' => 'Demo Integrador',
+            'saldo' => 0,
+            'status' => 'A',
             'sync_to_aspel' => 'pending',
         ], $adapter);
 
@@ -731,6 +809,33 @@ class AspelServiceTest extends TestCase
         $this->assertSame([], data_get($response, 'data.output_payload'));
     }
 
+    public function test_it_routes_rfc_lookup_conflicts_to_review_without_create_fallback(): void
+    {
+        [$service] = $this->makeAspelOperationService(
+            'updateContactWithLookup',
+            'PUT',
+            '/api/contacts/{clave}'
+        );
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => false,
+            'status_code' => 409,
+            'retryable' => false,
+            'data' => ['error' => 'RFC belongs to multiple contacts'],
+            'error' => ['code' => 'ambiguous_rfc', 'message' => 'RFC belongs to multiple contacts'],
+        ]);
+
+        $response = $service->updateContactWithLookup([
+            'rfc' => 'XAXX010101000',
+            'nombre' => 'Demo Integrador',
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+        $this->assertSame('warning', $response['status']);
+        $this->assertSame('ambiguous_rfc', data_get($response, 'data.warning_reason'));
+        $this->assertSame([], data_get($response, 'data.output_payload'));
+    }
+
     public function test_it_supports_polling_updated_contacts_with_explicit_get_operation(): void
     {
         $platform = Platform::query()->create([
@@ -988,7 +1093,7 @@ class AspelServiceTest extends TestCase
         $this->assertSame(0, data_get($response, 'data.created_count'));
     }
 
-    public function test_it_normalizes_empresa_02_contact_fields_and_omits_technical_identifiers(): void
+    public function test_it_normalizes_empresa_02_contact_fields_and_sends_hubspot_id_from_technical_context(): void
     {
         $platform = Platform::query()->create([
             'name' => 'ASPEL Fertifarma',
@@ -1030,7 +1135,11 @@ class AspelServiceTest extends TestCase
                 && ($body['invalido'] ?? null) === '1'
                 && ($body['referenciaLibre'] ?? null) === 'REFERENCIA CORTA'
                 && ($body['fechaAlta'] ?? null) === '2026-09-02'
-                && ! array_key_exists('hubspotObjectId', $body)
+                && ($body['saldo'] ?? null) === 0.0
+                && ($body['status'] ?? null) === 'A'
+                && ($body['hubspotObjectId'] ?? null) === '208589143093'
+                && ! array_key_exists('CAMPLIB19', $body)
+                && ! array_key_exists('CAMPLIB20', $body)
                 && ! array_key_exists('CVE_USUARIO', $body)
                 && ! array_key_exists('NOM_USUARIO', $body);
         })->andReturn([
@@ -1045,7 +1154,11 @@ class AspelServiceTest extends TestCase
             'invalido' => 1,
             'referenciaLibre' => ' REFERENCIA CORTA ',
             'fechaAlta' => '2026-09-02T15:30:00-06:00',
-            'hubspotObjectId' => '208589143093',
+            'saldo' => '0',
+            'status' => 'a',
+            'hubspot_object_id' => '208589143093',
+            'CAMPLIB19' => 'must-not-be-sent',
+            'CAMPLIB20' => 'must-not-be-sent',
             'CVE_USUARIO' => 1,
             'NOM_USUARIO' => 'INTEGRADOR',
         ], $adapter);
@@ -1087,6 +1200,8 @@ class AspelServiceTest extends TestCase
             'invalido' => 'NO',
             'referenciaLibre' => 'ESTA REFERENCIA SUPERA VEINTE CARACTERES',
             'fechaAlta' => 'not-a-date',
+            'saldo' => 0,
+            'status' => 'A',
         ], $adapter);
 
         $this->assertFalse($response['success']);
@@ -1097,6 +1212,23 @@ class AspelServiceTest extends TestCase
             ['invalido', 'referenciaLibre', 'fechaAlta'],
             array_keys($response['data']['errors'])
         );
+    }
+
+    public function test_it_requires_saldo_and_valid_status_only_when_creating_contact(): void
+    {
+        [$service] = $this->makeAspelOperationService('createContact', 'POST', '/api/contacts');
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldNotReceive('send');
+
+        $response = $service->createContact([
+            'nombre' => 'Demo Integrador',
+            'status' => 'X',
+        ], $adapter);
+
+        $this->assertFalse($response['success']);
+        $this->assertSame(422, $response['status_code']);
+        $this->assertArrayHasKey('saldo', $response['data']['errors']);
+        $this->assertArrayHasKey('status', $response['data']['errors']);
     }
 
     public function test_it_fetches_aspel_product_prices_by_sku(): void

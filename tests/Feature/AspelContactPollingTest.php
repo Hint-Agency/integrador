@@ -86,6 +86,61 @@ class AspelContactPollingTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_it_queries_with_overlap_without_moving_the_durable_cursor_backwards(): void
+    {
+        [$aspelPlatform, $scheduleEvent, $record] = $this->preparePollingContext();
+        $scheduleEvent->update([
+            'meta' => array_merge($scheduleEvent->meta ?? [], ['overlap_minutes' => 5]),
+        ]);
+        Config::query()->create([
+            'key' => 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_ts',
+            'value' => ['value' => '2026-09-15T12:00:00Z'],
+            'description' => 'cursor',
+            'is_encrypted' => false,
+        ]);
+        Config::query()->create([
+            'key' => 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_clave',
+            'value' => ['value' => '50902'],
+            'description' => 'cursor',
+            'is_encrypted' => false,
+        ]);
+
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(function (
+            string $platform,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query
+        ): bool {
+            return $query['sinceTs'] === '2026-09-15T11:55:00.000000Z'
+                && $query['sinceClave'] === '';
+        })->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'data' => [
+                'items' => [],
+                'nextSinceTs' => '2026-09-15T11:59:00Z',
+                'nextSinceClave' => '50901',
+                'hasMore' => false,
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ]);
+
+        $service = new AspelService(
+            $aspelPlatform,
+            app(AuthStrategyResolver::class),
+            $scheduleEvent->fresh(),
+            $record,
+        );
+        $result = $service->getUpdatedContacts([], $adapter);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('2026-09-15T12:00:00Z', data_get($result, 'data.cursor.sinceTs'));
+        $this->assertSame('50902', data_get($result, 'data.cursor.sinceClave'));
+    }
+
     public function test_it_processes_changed_contacts_and_persists_cursor_on_success(): void
     {
         config()->set('hubspot.access_token', 'token_123');
@@ -174,9 +229,9 @@ class AspelContactPollingTest extends TestCase
         $this->assertTrue($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $this->assertSame('2026-05-07 10:00:00', data_get($result, 'data.cursor.sinceTs'));
         $this->assertSame('50902', data_get($result, 'data.cursor.sinceClave'));
-        $this->assertSame('success', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.last_run_status')->first()?->value, 'value'));
-        $this->assertSame('2026-05-07 10:00:00', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_ts')->first()?->value, 'value'));
-        $this->assertSame('50902', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_clave')->first()?->value, 'value'));
+        $this->assertSame('success', data_get(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.last_run_status')->first()?->value, 'value'));
+        $this->assertSame('2026-05-07 10:00:00', data_get(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_ts')->first()?->value, 'value'));
+        $this->assertSame('50902', data_get(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_clave')->first()?->value, 'value'));
 
         $this->assertDatabaseHas('event_idempotency_keys', [
             'event_id' => $scheduleEvent->id,
@@ -315,9 +370,9 @@ class AspelContactPollingTest extends TestCase
         $result = $service->getUpdatedContacts([], $adapter);
 
         $this->assertFalse($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_ts')->first());
-        $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_clave')->first());
-        $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.last_run_status')->first()?->value, 'value'));
+        $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_ts')->first());
+        $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_clave')->first());
+        $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.last_run_status')->first()?->value, 'value'));
         $this->assertSame(2, data_get($result, 'data.polling_metrics.items_seen'));
         $this->assertSame(1, data_get($result, 'data.polling_metrics.items_processed'));
         $this->assertSame(1, data_get($result, 'data.polling_metrics.items_failed'));
@@ -532,8 +587,8 @@ class AspelContactPollingTest extends TestCase
         $result = $service->getUpdatedContacts([], $adapter);
 
         $this->assertFalse($result['success'], json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-        $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.since_ts')->first());
-        $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.' . $scheduleEvent->id . '.last_run_status')->first()?->value, 'value'));
+        $this->assertNull(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.since_ts')->first());
+        $this->assertSame('error', data_get(Config::query()->where('key', 'aspel.contacts.cursor.'.$scheduleEvent->id.'.last_run_status')->first()?->value, 'value'));
         $this->assertSame('ASPEL contact polling completed the current page with item failures.', $result['message']);
         $this->assertSame(3, data_get($result, 'data.failure_context.failed_items.0.detail_retry_attempts'));
     }

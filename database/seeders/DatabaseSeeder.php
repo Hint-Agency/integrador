@@ -21,6 +21,7 @@ class DatabaseSeeder extends Seeder
         $this->call(AspelWarehouseMappingsSeeder::class);
         $this->call(AspelQuoteFlowSeeder::class);
         $this->call(AspelContactCatalogSeeder::class);
+        $this->call(AspelContactContractSeeder::class);
 
         $admin = User::query()->firstOrCreate(
             ['email' => env('ADMIN_EMAIL', 'admin@example.com')],
