@@ -2453,6 +2453,122 @@ class HubspotService extends BaseService
         ]);
     }
 
+    public function syncAspelDocumentToHubspotDeal(array $payload): array
+    {
+        $detail = Arr::get($payload, 'aspel_detail', []);
+        if (! is_array($detail) || $detail === []) {
+            return [
+                'success' => false,
+                'message' => 'Missing ASPEL document detail payload for HubSpot deal sync.',
+                'data' => ['received_keys' => array_keys($payload)],
+            ];
+        }
+
+        $dealIds = $this->resolveAspelDocumentDealIds($payload, $detail);
+        if (count($dealIds) !== 1) {
+            return [
+                'success' => true,
+                'status' => 'warning',
+                'message' => count($dealIds) === 0
+                    ? 'ASPEL document has no HubSpot deal association.'
+                    : 'ASPEL document has multiple HubSpot deal associations.',
+                'data' => [
+                    'warning_reason' => count($dealIds) === 0
+                        ? 'missing_hubspot_deal_id'
+                        : 'multiple_hubspot_deal_ids',
+                    'tipo_documento' => Arr::get($detail, 'tipoDocumento') ?? Arr::get($payload, 'tipoDocumento'),
+                    'cve_doc' => Arr::get($detail, 'cveDoc') ?? Arr::get($payload, 'cveDoc'),
+                    'hubspot_deal_ids' => $dealIds,
+                    'origen_multiple' => (bool) (Arr::get($detail, 'origenMultiple') ?? Arr::get($payload, 'origenMultiple', false)),
+                ],
+            ];
+        }
+
+        $dealId = $dealIds[0];
+        $mappingEventId = $this->resolveAspelMappingEventId($payload);
+        $properties = $this->buildHubspotContactPropertiesFromSource($mappingEventId, $detail);
+        if ($properties === []) {
+            return [
+                'success' => false,
+                'message' => 'No mapped HubSpot deal properties found for ASPEL document sync.',
+                'data' => [
+                    'deal_id' => $dealId,
+                    'mapping_event_id' => $mappingEventId,
+                    'source_keys' => array_keys($detail),
+                ],
+            ];
+        }
+
+        $response = $this->hubspotApi->updateObject('deals', $dealId, $properties);
+        if (! ($response['success'] ?? false)) {
+            $note = $this->hubspotApi->addNoteToObject(
+                'deals',
+                $dealId,
+                '[Integrador ASPEL] No fue posible actualizar el negocio con el documento de SAE.',
+                [
+                    'tipoDocumento' => Arr::get($detail, 'tipoDocumento'),
+                    'cveDoc' => Arr::get($detail, 'cveDoc'),
+                    'record' => $this->record?->id,
+                    'error' => Arr::get($response, 'error.message') ?? Arr::get($response, 'message'),
+                ]
+            );
+
+            return [
+                'success' => false,
+                'message' => 'Failed to update HubSpot deal from ASPEL document.',
+                'data' => [
+                    'deal_id' => $dealId,
+                    'mapping_event_id' => $mappingEventId,
+                    'properties' => $properties,
+                    'hubspot_response' => $response,
+                    'hubspot_note' => $note,
+                ],
+            ];
+        }
+
+        $note = $this->hubspotApi->addNoteToObject(
+            'deals',
+            $dealId,
+            $this->buildAspelDocumentDealNote($detail),
+            [
+                'record' => $this->record?->id,
+                'versionSinc' => Arr::get($detail, 'versionSinc') ?? Arr::get($payload, 'versionSinc'),
+            ]
+        );
+
+        $noteSucceeded = ($note['success'] ?? false)
+            && (string) Arr::get($note, 'data.id', '') !== ''
+            && Arr::get($note, 'association.success', true) !== false
+            && Arr::get($note, 'timeline_association.success', true) !== false;
+
+        if (! $noteSucceeded) {
+            return [
+                'success' => false,
+                'message' => 'HubSpot deal was updated, but its ASPEL document note could not be created.',
+                'data' => [
+                    'deal_id' => $dealId,
+                    'mapping_event_id' => $mappingEventId,
+                    'properties' => $properties,
+                    'hubspot_response' => $response,
+                    'hubspot_note' => $note,
+                ],
+            ];
+        }
+
+        return $this->success('ASPEL document synchronized with HubSpot deal.', [
+            'operation' => 'updated',
+            'deal_id' => $dealId,
+            'mapping_event_id' => $mappingEventId,
+            'properties' => $properties,
+            'tipo_documento' => Arr::get($detail, 'tipoDocumento'),
+            'cve_doc' => Arr::get($detail, 'cveDoc'),
+            'hubspot_note' => [
+                'success' => true,
+                'note_id' => Arr::get($note, 'data.id'),
+            ],
+        ]);
+    }
+
     public function testConnection(): array
     {
         $token = config('hubspot.access_token');
@@ -3086,6 +3202,63 @@ class HubspotService extends BaseService
             ?? Arr::get($payload, 'source_event_id');
 
         return is_numeric($candidate) ? (int) $candidate : null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function resolveAspelDocumentDealIds(array $payload, array $detail): array
+    {
+        $candidates = [
+            Arr::get($detail, 'hubspotDealId'),
+            Arr::get($payload, 'hubspotDealId'),
+            ...Arr::wrap(Arr::get($detail, 'hubspotDealIds', [])),
+            ...Arr::wrap(Arr::get($payload, 'hubspotDealIds', [])),
+        ];
+
+        return collect($candidates)
+            ->filter(fn (mixed $value): bool => is_scalar($value) && trim((string) $value) !== '')
+            ->map(fn (mixed $value): string => trim((string) $value))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function buildAspelDocumentDealNote(array $detail): string
+    {
+        $type = strtoupper(trim((string) Arr::get($detail, 'tipoDocumento', '')));
+        $label = $type === 'F' ? 'Factura' : ($type === 'R' ? 'Remision' : 'Documento');
+        $quoteKeys = Arr::wrap(Arr::get($detail, 'clavesCotizacion', []));
+        if ($quoteKeys === [] && is_scalar(Arr::get($detail, 'claveCotizacion'))) {
+            $quoteKeys = [Arr::get($detail, 'claveCotizacion')];
+        }
+
+        $lines = [
+            '[Integrador ASPEL] '.$label.' sincronizada desde SAE',
+            'Clave: '.(string) Arr::get($detail, 'cveDoc', 'N/A'),
+            'Serie: '.(string) Arr::get($detail, 'serie', ''),
+            'Folio: '.(string) Arr::get($detail, 'folio', 'N/A'),
+            'Estatus SAE: '.(string) Arr::get($detail, 'status', 'N/A'),
+            'Importe SAE: '.(is_numeric(Arr::get($detail, 'importe')) ? (string) Arr::get($detail, 'importe') : 'N/A'),
+            'Cliente SAE: '.(string) Arr::get($detail, 'claveCliente', 'N/A'),
+            'Fecha documento: '.(string) Arr::get($detail, 'fechaDocumento', 'N/A'),
+            'Version de sincronizacion: '.(string) Arr::get($detail, 'versionSinc', 'N/A'),
+            $quoteKeys !== [] ? 'Cotizacion(es) origen: '.implode(', ', array_map('strval', $quoteKeys)) : null,
+            Arr::get($detail, 'documentoAnterior')
+                ? 'Documento anterior: '.(string) Arr::get($detail, 'tipoDocumentoAnterior', '').' '.(string) Arr::get($detail, 'documentoAnterior')
+                : null,
+            Arr::get($detail, 'documentoSiguiente')
+                ? 'Documento siguiente: '.(string) Arr::get($detail, 'tipoDocumentoSiguiente', '').' '.(string) Arr::get($detail, 'documentoSiguiente')
+                : null,
+            (bool) Arr::get($detail, 'origenMultiple', false)
+                ? 'Advertencia: SAE reporta multiples documentos de origen.'
+                : null,
+            'PDF: '.((bool) Arr::get($detail, 'pdfDisponible', false)
+                ? (string) (Arr::get($detail, 'pdfUrl') ?: 'disponible')
+                : (string) (Arr::get($detail, 'pdfEstado') ?: 'no disponible')),
+        ];
+
+        return implode("\n", array_filter($lines, static fn (mixed $line): bool => is_string($line) && $line !== ''));
     }
 
     /**

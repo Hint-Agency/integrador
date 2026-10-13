@@ -1,5 +1,6 @@
 <script setup>
 import AdminLayout from '@/Layouts/AdminLayout.vue';
+import HelpTooltip from '@/Components/HelpTooltip.vue';
 import IconAction from '@/Components/IconAction.vue';
 import { computed, ref } from 'vue';
 import { Link, router, useForm } from '@inertiajs/vue3';
@@ -189,54 +190,59 @@ const submit = () => {
                     Este evento todavía no tiene mapeos de propiedades configurados.
                 </div>
 
-                <div v-else class="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Origen</th>
-                                <th>Destino</th>
-                                <th>Clave de mapeo</th>
-                                <th>Estado</th>
-                                <th>Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="relationship in props.relationships" :key="relationship.id">
-                                <td>
-                                    <template v-if="relationship.meta?.mode === 'constant'">
-                                        <strong>Valor fijo</strong>
-                                        <div class="cell-meta">{{ JSON.stringify(relationship.meta.value) }}</div>
-                                    </template>
-                                    <template v-else>
-                                        <strong>{{ relationship.property?.name }}</strong>
-                                        <div class="cell-meta">{{ relationship.property?.key }} · {{ relationship.property?.type }}</div>
-                                    </template>
-                                </td>
-                                <td>
-                                    <strong>{{ relationship.related_property?.name }}</strong>
-                                    <div class="cell-meta">{{ relationship.related_property?.key }} · {{ relationship.related_property?.type }}</div>
-                                </td>
-                                <td>{{ relationship.meta?.mode === 'constant' ? 'Constante' : relationship.mapping_key || relationship.property?.key || 'auto' }}</td>
-                                <td>
-                                    <span :class="relationship.active ? 'status active' : 'status inactive'">
-                                        {{ relationship.active ? 'Activo' : 'Inactivo' }}
-                                    </span>
-                                </td>
-                                <td class="actions">
-                                    <IconAction icon="edit" label="Editar mapeo" @click="startEdit(relationship)" />
-                                    <IconAction icon="delete" label="Eliminar mapeo" variant="danger" @click="removeRelationship(relationship.id)" />
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div v-else class="mapping-list">
+                    <details v-for="relationship in props.relationships" :key="relationship.id" class="mapping-item">
+                        <summary class="mapping-summary">
+                            <div class="mapping-route">
+                                <strong>
+                                    {{ relationship.meta?.mode === 'constant' ? `Valor fijo: ${JSON.stringify(relationship.meta.value)}` : relationship.property?.name }}
+                                </strong>
+                                <span class="route-arrow" aria-hidden="true">→</span>
+                                <strong>{{ relationship.related_property?.name }}</strong>
+                            </div>
+                            <span :class="relationship.active ? 'status active' : 'status inactive'">
+                                {{ relationship.active ? 'Activo' : 'Inactivo' }}
+                            </span>
+                            <span class="summary-chevron" aria-hidden="true">⌄</span>
+                        </summary>
+
+                        <div class="mapping-details">
+                            <div class="detail-row">
+                                <span>Propiedad origen</span>
+                                <code v-if="relationship.meta?.mode === 'constant'">
+                                    Constante · {{ typeof relationship.meta.value }}
+                                </code>
+                                <code v-else>
+                                    {{ relationship.property?.key }} · {{ relationship.property?.type }}
+                                </code>
+                            </div>
+                            <div class="detail-row">
+                                <span>Propiedad destino</span>
+                                <code>{{ relationship.related_property?.key }} · {{ relationship.related_property?.type }}</code>
+                            </div>
+                            <div class="detail-row">
+                                <span>{{ relationship.meta?.mode === 'constant' ? 'Valor fijo' : 'Clave de mapeo' }}</span>
+                                <code>
+                                    {{ relationship.meta?.mode === 'constant' ? JSON.stringify(relationship.meta.value) : relationship.mapping_key || relationship.property?.key || 'auto' }}
+                                </code>
+                            </div>
+                            <div class="detail-actions">
+                                <IconAction icon="edit" label="Editar mapeo" @click="startEdit(relationship)" />
+                                <IconAction icon="delete" label="Eliminar mapeo" variant="danger" @click="removeRelationship(relationship.id)" />
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </section>
 
             <section class="panel editor">
                 <header class="panel-head">
-                    <div>
+                    <div class="editor-heading">
                         <h2>{{ editingRelationshipId ? 'Editar mapeo' : 'Crear mapeo' }}</h2>
-                        <p>Elige propiedades de entrada y destino. Usa `mapping_key` cuando la ruta del payload sea distinta de la clave origen.</p>
+                        <HelpTooltip label="Ayuda para configurar el mapeo">
+                            <p>Elige propiedades de entrada y destino.</p>
+                            <p>Usa `mapping_key` cuando la ruta del payload sea distinta de la clave origen.</p>
+                        </HelpTooltip>
                     </div>
                 </header>
 
@@ -268,16 +274,20 @@ const submit = () => {
                                 <option value="boolean">Booleano</option>
                             </select>
                         </label>
-                        <label class="field">
-                            <span>Valor fijo</span>
-                            <select v-if="form.constant_type === 'boolean'" v-model="form.constant_value">
+                        <div class="field">
+                            <div class="field-heading">
+                                <label for="mapping-constant-value">Valor fijo</label>
+                                <HelpTooltip label="Ayuda sobre el valor fijo">
+                                    <p>Siempre se enviará este valor a la propiedad destino, aunque el payload contenga otro valor.</p>
+                                </HelpTooltip>
+                            </div>
+                            <select v-if="form.constant_type === 'boolean'" id="mapping-constant-value" v-model="form.constant_value">
                                 <option value="false">false</option>
                                 <option value="true">true</option>
                             </select>
-                            <input v-else v-model="form.constant_value" :type="form.constant_type === 'number' ? 'number' : 'text'" step="any" required>
-                            <small>Siempre se enviará este valor a la propiedad destino, aunque el payload contenga otro valor.</small>
-                            <small v-if="form.errors.constant_value || form.errors['meta.value']">{{ form.errors.constant_value || form.errors['meta.value'] }}</small>
-                        </label>
+                            <input v-else id="mapping-constant-value" v-model="form.constant_value" :type="form.constant_type === 'number' ? 'number' : 'text'" step="any" required>
+                            <small v-if="form.errors.constant_value || form.errors['meta.value']" class="field-error">{{ form.errors.constant_value || form.errors['meta.value'] }}</small>
+                        </div>
                     </template>
 
                     <label class="field">
@@ -290,20 +300,28 @@ const submit = () => {
                         </select>
                     </label>
 
-                    <label v-if="form.mode === 'property'" class="field">
-                        <span>Clave de mapeo</span>
-                        <input v-model="form.mapping_key" type="text" placeholder="raw.associations.deals.0.owner.email">
-                        <small>Opcional. Si está vacío, se usa la clave de la propiedad origen. Soporta rutas enriquecidas como hs_terms, raw.properties.hs_terms, raw.associations.deals.0.owner.email o entity_results.company.target_id.</small>
-                        <small>Para respuestas de almacenes usa destination_response.data.existencias, destination_response.data.stock_maximo o destination_response.data.warehouse_records.0.exist. Los registros individuales corresponden a los almacenes seleccionados.</small>
-                        <small>Para preparar cotizaciones SAE usa contact.properties.calle_envio, quote.properties.hs_sender_email o line_item.properties.clave. El nombre completo calculado está disponible como contact_name.</small>
-                    </label>
+                    <div v-if="form.mode === 'property'" class="field">
+                        <div class="field-heading">
+                            <label for="mapping-key">Clave de mapeo</label>
+                            <HelpTooltip label="Ayuda sobre la clave de mapeo">
+                                <p>Es opcional. Si está vacía, se usa la clave de la propiedad origen.</p>
+                                <p>Admite rutas enriquecidas como `raw.properties.hs_terms`, `raw.associations.deals.0.owner.email` o `entity_results.company.target_id`.</p>
+                                <p>Para almacenes usa rutas `destination_response.data.*`. Para cotizaciones SAE usa `contact.properties.*`, `quote.properties.*` o `line_item.properties.*`.</p>
+                            </HelpTooltip>
+                        </div>
+                        <input id="mapping-key" v-model="form.mapping_key" type="text" placeholder="raw.associations.deals.0.owner.email">
+                    </div>
 
-                    <label class="field">
-                        <span>Meta JSON</span>
-                        <textarea v-model="form.meta_text" rows="5" placeholder='{"transform":"decimal","default_value":0,"apply_default_when":["missing","null","empty"]}' />
-                        <small>Opcional. Admite transformaciones y valores predeterminados cuando la propiedad origen no existe, es nula o está vacía.</small>
-                        <small>En prepareAspelQuote define {"scope":"header"} para cabecera/dirección o {"scope":"line_item"} para cada partida.</small>
-                    </label>
+                    <div class="field">
+                        <div class="field-heading">
+                            <label for="mapping-meta">Meta JSON</label>
+                            <HelpTooltip label="Ayuda sobre Meta JSON">
+                                <p>Opcional. Admite transformaciones y valores predeterminados cuando la propiedad origen no existe, es nula o está vacía.</p>
+                                <p>En `prepareAspelQuote` usa `{"scope":"header"}` para cabecera y dirección, o `{"scope":"line_item"}` para cada partida.</p>
+                            </HelpTooltip>
+                        </div>
+                        <textarea id="mapping-meta" v-model="form.meta_text" rows="5" placeholder='{"transform":"decimal","default_value":0,"apply_default_when":["missing","null","empty"]}' />
+                    </div>
 
                     <label class="check">
                         <input v-model="form.active" type="checkbox">
@@ -393,6 +411,13 @@ const submit = () => {
     display:grid;
     grid-template-columns:minmax(0, 1.4fr) minmax(320px, 0.9fr);
     gap:16px;
+    align-items:start;
+}
+
+.editor{
+    position:sticky;
+    top:16px;
+    align-self:start;
 }
 
 .panel-head{
@@ -412,39 +437,115 @@ const submit = () => {
     color:#64748b;
 }
 
+.editor-heading,
+.field-heading{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+}
+
+.editor-heading h2{
+    margin:0;
+}
+
 .empty-state{
     padding:18px;
     color:#64748b;
 }
 
-.table-wrap{
-    overflow:auto;
+.mapping-list{
+    display:grid;
+    gap:10px;
+    padding:14px;
 }
 
-table{
-    width:100%;
-    border-collapse:collapse;
+.mapping-item{
+    overflow:hidden;
+    border:1px solid #dbe4ef;
+    border-radius:12px;
+    background:#fff;
 }
 
-th,
-td{
-    padding:12px 14px;
+.mapping-summary{
+    display:grid;
+    grid-template-columns:minmax(0, 1fr) auto auto;
+    align-items:center;
+    gap:12px;
+    padding:13px 14px;
+    cursor:pointer;
+    list-style:none;
+}
+
+.mapping-summary::-webkit-details-marker{
+    display:none;
+}
+
+.mapping-route{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    min-width:0;
+}
+
+.mapping-route strong{
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    color:#0f172a;
+    font-size:14px;
+}
+
+.route-arrow{
+    flex:0 0 auto;
+    color:#2563eb;
+    font-size:18px;
+}
+
+.summary-chevron{
+    color:#64748b;
+    transition:transform .16s ease;
+}
+
+.mapping-item[open] .summary-chevron{
+    transform:rotate(180deg);
+}
+
+.mapping-details{
+    display:grid;
+    padding:4px 14px 12px;
+    border-top:1px solid #e2e8f0;
+    background:#f8fafc;
+}
+
+.detail-row{
+    display:grid;
+    grid-template-columns:minmax(130px, .35fr) minmax(0, 1fr);
+    align-items:baseline;
+    gap:14px;
+    padding:10px 2px;
     border-bottom:1px solid #e2e8f0;
-    text-align:left;
-    vertical-align:top;
 }
 
-th{
+.detail-row span{
+    color:#64748b;
     font-size:11px;
     text-transform:uppercase;
     letter-spacing:.06em;
-    color:#64748b;
 }
 
-.cell-meta{
-    margin-top:4px;
+.detail-row code{
+    overflow-wrap:anywhere;
+    color:#334155;
     font-size:12px;
-    color:#64748b;
+}
+
+.detail-actions{
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    padding-top:10px;
 }
 
 .status{
@@ -482,9 +583,19 @@ th{
     color:#334155;
 }
 
+.field-heading label{
+    font-size:13px;
+    font-weight:600;
+    color:#334155;
+}
+
 .field small{
     color:#64748b;
     font-size:12px;
+}
+
+.field .field-error{
+    color:#b91c1c;
 }
 
 .field input,
@@ -566,6 +677,35 @@ th{
 @media (max-width: 1080px){
     .workspace{
         grid-template-columns:1fr;
+    }
+
+    .editor{
+        position:static;
+    }
+}
+
+@media (max-width: 640px){
+    .mapping-summary{
+        grid-template-columns:minmax(0, 1fr) auto;
+    }
+
+    .mapping-summary .status{
+        display:none;
+    }
+
+    .mapping-route{
+        align-items:flex-start;
+        flex-direction:column;
+        gap:3px;
+    }
+
+    .route-arrow{
+        transform:rotate(90deg);
+    }
+
+    .detail-row{
+        grid-template-columns:1fr;
+        gap:4px;
     }
 }
 </style>

@@ -1088,6 +1088,306 @@ class AspelService extends GenericPlatformService
         ];
     }
 
+    public function getUpdatedRemissions(array $payload = [], ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        return $this->getUpdatedDocuments('remissions', 'R', $payload, $httpAdapter);
+    }
+
+    public function getUpdatedInvoices(array $payload = [], ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        return $this->getUpdatedDocuments('invoices', 'F', $payload, $httpAdapter);
+    }
+
+    private function getUpdatedDocuments(
+        string $scope,
+        string $documentType,
+        array $payload,
+        ?GenericHttpAdapter $httpAdapter = null
+    ): array {
+        if (! $this->event) {
+            return [
+                'success' => false,
+                'message' => 'ASPEL schedule context is required for document change polling.',
+                'data' => ['scope' => $scope],
+            ];
+        }
+
+        if (! $this->record) {
+            return $this->sendRequest(
+                $this->resolveOperationEndpoint('poll', []),
+                $this->resolveOperationHttpMethod('poll'),
+                $payload,
+                $httpAdapter
+            );
+        }
+
+        $take = min(1000, max(1, (int) ($this->event->meta['take'] ?? Arr::get($payload, 'take', self::DEFAULT_CHANGES_TAKE))));
+        $cursor = $this->loadCursorStateForScope($scope);
+        $overlapMinutes = $this->resolvePollingOverlapMinutes();
+        $runStartedAt = now()->toISOString();
+        $metrics = [
+            'take' => $take,
+            'pages_processed' => 0,
+            'items_seen' => 0,
+            'items_processed' => 0,
+            'items_skipped' => 0,
+            'items_failed' => 0,
+            'overlap_minutes' => $overlapMinutes,
+        ];
+
+        $this->persistRunStateForScope($scope, [
+            'last_run_started_at' => $runStartedAt,
+            'last_run_status' => 'running',
+            'last_error' => null,
+        ]);
+
+        $persistedCursor = [
+            'sinceTs' => $cursor['sinceTs'],
+            'sinceClave' => $cursor['sinceClave'],
+        ];
+        $currentCursor = $this->applyPollingOverlap($persistedCursor, $overlapMinutes);
+
+        try {
+            do {
+                $failedItems = [];
+                $pageResponse = $this->fetchChangesPage($currentCursor, $take, $httpAdapter);
+                if (! ($pageResponse['success'] ?? false)) {
+                    return $this->failPollingRunForScope(
+                        $scope,
+                        "Failed to fetch changed {$scope} from ASPEL.",
+                        $pageResponse,
+                        $currentCursor,
+                        $metrics
+                    );
+                }
+
+                $items = Arr::get($pageResponse, 'data.items', []);
+                if (! is_array($items)) {
+                    return $this->failPollingRunForScope(
+                        $scope,
+                        "Invalid ASPEL {$scope} changes payload: items must be an array.",
+                        $pageResponse,
+                        $currentCursor,
+                        $metrics
+                    );
+                }
+
+                $nextSinceTs = $this->normalizeCursorValue(
+                    Arr::get($pageResponse, 'data.nextCursor.sinceTs')
+                        ?? Arr::get($pageResponse, 'data.nextSinceTs')
+                );
+                $nextSinceClave = $this->normalizeCursorValue(
+                    Arr::get($pageResponse, 'data.nextCursor.sinceClave')
+                        ?? Arr::get($pageResponse, 'data.nextSinceClave')
+                );
+                $hasMore = (bool) Arr::get($pageResponse, 'data.hasMore', false);
+
+                if ($hasMore && ($nextSinceTs === null || $nextSinceClave === null)) {
+                    return $this->failPollingRunForScope(
+                        $scope,
+                        "Invalid ASPEL {$scope} changes payload: nextCursor is required when hasMore is true.",
+                        $pageResponse,
+                        $currentCursor,
+                        $metrics
+                    );
+                }
+
+                foreach ($items as $item) {
+                    $metrics['items_seen']++;
+                    $changeIdempotency = ['model' => null];
+
+                    if (! is_array($item)) {
+                        $metrics['items_failed']++;
+                        $failedItems[] = [
+                            'stage' => 'change_item_validation',
+                            'message' => 'Invalid ASPEL document change item.',
+                            'item' => $item,
+                        ];
+
+                        continue;
+                    }
+
+                    $cveDoc = $this->resolveAspelDocumentKey($item);
+                    $versionSinc = $this->resolveAspelVersionSinc($item);
+                    if ($cveDoc === null || $versionSinc === null) {
+                        $metrics['items_failed']++;
+                        $failedItems[] = [
+                            'stage' => 'change_item_validation',
+                            'message' => 'ASPEL document change requires cveDoc and versionSinc.',
+                            'item' => $item,
+                        ];
+
+                        continue;
+                    }
+
+                    try {
+                        $changeIdempotency = $this->acquireScopedChangeIdempotency(
+                            $scope,
+                            $cveDoc,
+                            $versionSinc,
+                            ['tipoDocumento' => $documentType, 'cveDoc' => $cveDoc]
+                        );
+
+                        if (($changeIdempotency['skip'] ?? false) === true) {
+                            $metrics['items_skipped']++;
+
+                            continue;
+                        }
+
+                        $detailResponse = $this->getDocumentDetailWithRetry($cveDoc, $httpAdapter);
+                        if (! ($detailResponse['success'] ?? false)) {
+                            $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                                'reason' => 'detail_fetch_failed',
+                                'status_code' => $detailResponse['status_code'] ?? null,
+                                'error' => $detailResponse['error'] ?? null,
+                            ]);
+                            $metrics['items_failed']++;
+                            $failedItems[] = [
+                                'stage' => 'detail_fetch',
+                                'tipoDocumento' => $documentType,
+                                'cveDoc' => $cveDoc,
+                                'versionSinc' => $versionSinc,
+                                'response' => $detailResponse,
+                            ];
+
+                            continue;
+                        }
+
+                        $detail = Arr::get($detailResponse, 'data', []);
+                        if (! is_array($detail)) {
+                            $detail = [];
+                        }
+
+                        $normalizedPayload = [
+                            'source_platform' => 'aspel',
+                            'source_event_id' => $this->event->id,
+                            'document_scope' => $scope,
+                            'tipoDocumento' => $this->resolveScalarValue([
+                                Arr::get($detail, 'tipoDocumento'),
+                                Arr::get($item, 'tipoDocumento'),
+                                $documentType,
+                            ]),
+                            'cveDoc' => $cveDoc,
+                            'versionSinc' => $versionSinc,
+                            'hubspotDealId' => Arr::get($detail, 'hubspotDealId') ?? Arr::get($item, 'hubspotDealId'),
+                            'hubspotDealIds' => Arr::get($detail, 'hubspotDealIds', Arr::get($item, 'hubspotDealIds', [])),
+                            'origenMultiple' => (bool) (Arr::get($detail, 'origenMultiple') ?? Arr::get($item, 'origenMultiple', false)),
+                            'aspel_detail' => $detail,
+                            'cursor_context' => [
+                                'input' => $currentCursor,
+                                'next' => [
+                                    'sinceTs' => $nextSinceTs,
+                                    'sinceClave' => $nextSinceClave,
+                                ],
+                                'hasMore' => $hasMore,
+                            ],
+                        ];
+
+                        $syncResult = $this->processHubspotDocumentChangeSynchronously($normalizedPayload);
+                        if (! ($syncResult['success'] ?? false)) {
+                            $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                                'reason' => 'hubspot_sync_failed',
+                                'record_id' => $syncResult['record_id'] ?? null,
+                                'message' => $syncResult['message'] ?? null,
+                            ]);
+                            $metrics['items_failed']++;
+                            $failedItems[] = [
+                                'stage' => 'hubspot_sync',
+                                'tipoDocumento' => $normalizedPayload['tipoDocumento'],
+                                'cveDoc' => $cveDoc,
+                                'versionSinc' => $versionSinc,
+                                'message' => $syncResult['message'] ?? 'Failed to sync ASPEL document to HubSpot.',
+                                'hubspot_sync' => $syncResult,
+                            ];
+
+                            continue;
+                        }
+
+                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'success', [
+                            'tipoDocumento' => $normalizedPayload['tipoDocumento'],
+                            'cveDoc' => $cveDoc,
+                            'version_sinc' => $versionSinc,
+                            'record_id' => $syncResult['record_id'] ?? null,
+                            'hubspot_deal_id' => Arr::get($syncResult, 'data.deal_id'),
+                        ]);
+                        $metrics['items_processed']++;
+                    } catch (\Throwable $exception) {
+                        $this->updateChangeIdempotencyStatus($changeIdempotency['model'] ?? null, 'failed', [
+                            'reason' => 'unexpected_item_error',
+                            'exception' => get_class($exception),
+                            'message' => $exception->getMessage(),
+                        ]);
+                        $metrics['items_failed']++;
+                        $failedItems[] = [
+                            'stage' => 'unexpected_item_error',
+                            'tipoDocumento' => $documentType,
+                            'cveDoc' => $cveDoc,
+                            'versionSinc' => $versionSinc,
+                            'message' => $exception->getMessage(),
+                        ];
+                    }
+                }
+
+                if ($failedItems !== []) {
+                    return $this->failPollingRunForScope(
+                        $scope,
+                        "ASPEL {$scope} polling completed the current page with item failures.",
+                        [
+                            'failed_count' => count($failedItems),
+                            'failed_items' => $failedItems,
+                        ],
+                        $currentCursor,
+                        $metrics
+                    );
+                }
+
+                $metrics['pages_processed']++;
+                $currentCursor = [
+                    'sinceTs' => $nextSinceTs ?: $currentCursor['sinceTs'],
+                    'sinceClave' => $nextSinceClave ?? $currentCursor['sinceClave'],
+                ];
+                $persistedCursor = $overlapMinutes > 0
+                    ? $this->laterCursor($persistedCursor, $currentCursor)
+                    : $currentCursor;
+                $this->persistCursorStateForScope($scope, $persistedCursor);
+            } while ($hasMore);
+        } catch (\Throwable $exception) {
+            return $this->failPollingRunForScope(
+                $scope,
+                "ASPEL {$scope} change polling failed unexpectedly.",
+                ['exception' => get_class($exception), 'message' => $exception->getMessage()],
+                $currentCursor,
+                $metrics
+            );
+        }
+
+        $runFinishedAt = now()->toISOString();
+        $this->persistRunStateForScope($scope, [
+            'last_run_finished_at' => $runFinishedAt,
+            'last_run_status' => 'success',
+            'last_error' => null,
+        ]);
+
+        $data = [
+            'cursor' => $persistedCursor,
+            'metrics' => $metrics,
+            'last_run_started_at' => $runStartedAt,
+            'last_run_finished_at' => $runFinishedAt,
+            'output_payload' => [],
+        ];
+        $this->mergeRecordDetails([
+            'service_output' => $data,
+            'cursor_state' => $persistedCursor,
+            'polling_metrics' => $metrics,
+        ]);
+
+        return [
+            'success' => true,
+            'message' => "ASPEL {$scope} changes processed successfully.",
+            'data' => $data,
+        ];
+    }
+
     public function getContactDetailByClave(string $clave, ?GenericHttpAdapter $httpAdapter = null): array
     {
         $normalizedClave = trim($clave);
@@ -1132,6 +1432,41 @@ class AspelService extends GenericPlatformService
 
         return $this->sendRequest(
             $this->resolveDetailEndpoint($normalizedClave),
+            'GET',
+            [],
+            $httpAdapter
+        );
+    }
+
+    public function getRemissionDetailByCveDoc(string $cveDoc, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        return $this->getDocumentDetailByCveDoc($cveDoc, $httpAdapter);
+    }
+
+    public function getInvoiceDetailByCveDoc(string $cveDoc, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        return $this->getDocumentDetailByCveDoc($cveDoc, $httpAdapter);
+    }
+
+    private function getDocumentDetailByCveDoc(string $cveDoc, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $normalizedCveDoc = trim($cveDoc);
+        if ($normalizedCveDoc === '') {
+            return [
+                'success' => false,
+                'message' => 'ASPEL document detail requires cveDoc.',
+                'data' => [],
+                'error' => [
+                    'code' => 'missing_cve_doc',
+                    'message' => 'ASPEL document detail requires cveDoc.',
+                    'details' => null,
+                ],
+                'status_code' => 0,
+            ];
+        }
+
+        return $this->sendRequest(
+            $this->resolveDetailEndpoint($normalizedCveDoc),
             'GET',
             [],
             $httpAdapter
@@ -1184,6 +1519,44 @@ class AspelService extends GenericPlatformService
         do {
             $attempt++;
             $response = $this->getProductDetailByClave($clave, $httpAdapter);
+            $lastResponse = $response;
+
+            if (($response['success'] ?? false) === true) {
+                $response['retry_attempts'] = $attempt;
+
+                return $response;
+            }
+
+            if (($response['status_code'] ?? null) !== 404) {
+                $response['retry_attempts'] = $attempt;
+
+                return $response;
+            }
+
+            $backoffSeconds = self::DETAIL_NOT_FOUND_RETRY_BACKOFF_SECONDS[$attempt - 1] ?? null;
+            if ($backoffSeconds === null) {
+                break;
+            }
+
+            if (! app()->environment('testing')) {
+                sleep($backoffSeconds);
+            }
+        } while (true);
+
+        $lastResponse['retry_attempts'] = $attempt;
+        $lastResponse['retry_exhausted'] = true;
+
+        return $lastResponse;
+    }
+
+    private function getDocumentDetailWithRetry(string $cveDoc, ?GenericHttpAdapter $httpAdapter = null): array
+    {
+        $attempt = 0;
+        $lastResponse = [];
+
+        do {
+            $attempt++;
+            $response = $this->getDocumentDetailByCveDoc($cveDoc, $httpAdapter);
             $lastResponse = $response;
 
             if (($response['success'] ?? false) === true) {
@@ -1435,6 +1808,15 @@ class AspelService extends GenericPlatformService
         }
 
         return null;
+    }
+
+    private function resolveAspelDocumentKey(array $payload): ?string
+    {
+        return $this->resolveScalarValue([
+            Arr::get($payload, 'cveDoc'),
+            Arr::get($payload, 'CVE_DOC'),
+            Arr::get($payload, 'clave'),
+        ]);
     }
 
     private function preparePayloadForOperation(string $operation, array $payload): array
@@ -2222,11 +2604,21 @@ class AspelService extends GenericPlatformService
             ];
         }
 
+        return $this->acquireScopedChangeIdempotency($scope, $clave, $versionSinc);
+    }
+
+    private function acquireScopedChangeIdempotency(
+        string $scope,
+        string $clave,
+        string $versionSinc,
+        array $metadata = []
+    ): array {
+
         $key = $this->buildChangeIdempotencyKey($scope, $clave, $versionSinc);
         $expiresAt = now()->addHours(self::CHANGE_IDEMPOTENCY_TTL_HOURS);
         $staleBefore = now()->subMinutes(self::CHANGE_IDEMPOTENCY_STALE_MINUTES);
 
-        $state = DB::transaction(function () use ($key, $expiresAt, $staleBefore, $clave, $versionSinc, $scope): array {
+        $state = DB::transaction(function () use ($key, $expiresAt, $staleBefore, $clave, $versionSinc, $scope, $metadata): array {
             $existing = EventIdempotencyKey::query()
                 ->where('idempotency_key', $key)
                 ->lockForUpdate()
@@ -2241,11 +2633,11 @@ class AspelService extends GenericPlatformService
                     'method' => 'CHANGE',
                     'status' => 'processing',
                     'expires_at' => $expiresAt,
-                    'metadata' => [
+                    'metadata' => array_merge([
                         'source' => 'aspel_'.$scope.'_changes',
                         'clave' => $clave,
                         'versionSinc' => $versionSinc,
-                    ],
+                    ], $metadata),
                 ]);
 
                 return ['state' => 'acquired', 'model' => $created];
@@ -2263,7 +2655,7 @@ class AspelService extends GenericPlatformService
                 return ['state' => 'already_processing', 'model' => $existing];
             }
 
-            $metadata = is_array($existing->metadata) ? $existing->metadata : [];
+            $existingMetadata = is_array($existing->metadata) ? $existing->metadata : [];
             $existing->update([
                 'event_id' => $this->event->id,
                 'record_id' => $this->record->id,
@@ -2271,11 +2663,11 @@ class AspelService extends GenericPlatformService
                 'method' => 'CHANGE',
                 'status' => 'processing',
                 'expires_at' => $expiresAt,
-                'metadata' => array_merge($metadata, [
+                'metadata' => array_merge($existingMetadata, [
                     'source' => 'aspel_'.$scope.'_changes',
                     'clave' => $clave,
                     'versionSinc' => $versionSinc,
-                ]),
+                ], $metadata),
             ]);
 
             return ['state' => 'acquired', 'model' => $existing->fresh()];
@@ -2375,6 +2767,20 @@ class AspelService extends GenericPlatformService
             return [
                 'success' => false,
                 'message' => 'No HubSpot event configured for ASPEL product changes.',
+                'data' => [],
+            ];
+        }
+
+        return $this->processEventSynchronously($nextEvent, $payload, $this->record);
+    }
+
+    private function processHubspotDocumentChangeSynchronously(array $payload): array
+    {
+        $nextEvent = $this->event->to_event;
+        if (! $nextEvent) {
+            return [
+                'success' => false,
+                'message' => 'No HubSpot event configured for ASPEL document changes.',
                 'data' => [],
             ];
         }
