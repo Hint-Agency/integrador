@@ -481,10 +481,11 @@ Las siguientes capacidades existen en `/Users/hint/laravel-sites/integrador` y D
   - si falla cualquier item del batch, el cursor NO debe avanzar
   - si `hasMore = true`, el mismo run debe seguir procesando inmediatamente
 - Matching hacia HubSpot DEBE seguir este orden:
-  1. `clave`
-  2. `rfc`
-  3. `phone`
-  4. `email`
+  1. `email`
+  2. `phone`
+  3. `clave`
+  4. `firstname`, usando `nombre` de ASPEL como valor
+- `rfc` NO debe utilizarse para matching ASPEL -> HubSpot porque SAE puede compartir RFC genericos entre clientes.
 - Si no encuentra contacto en HubSpot, el sistema DEBE crearlo.
 - Si encuentra multiples coincidencias para una misma llave, el sistema DEBE detener la operacion de ese item, registrar el contexto en `Record.details` y NO actualizar automaticamente.
 - El flujo ASPEL -> HubSpot NO debe reutilizar `sync_to_aspel` ni disparar el trigger manual HubSpot -> ASPEL.

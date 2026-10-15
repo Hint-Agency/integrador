@@ -1214,6 +1214,43 @@ class AspelServiceTest extends TestCase
         );
     }
 
+    public function test_it_omits_empty_invalido_from_partial_contact_updates(): void
+    {
+        [$service] = $this->makeAspelOperationService(
+            'updateContact',
+            'PUT',
+            '/api/contacts/{clave}'
+        );
+        $adapter = Mockery::mock(GenericHttpAdapter::class);
+        $adapter->shouldReceive('send')->once()->withArgs(fn (
+            string $platformKey,
+            string $endpoint,
+            string $method,
+            array $headers,
+            array $query,
+            array $body
+        ): bool => $platformKey === 'aspel'
+            && $endpoint === 'https://api.example.com/api/contacts/58333'
+            && $method === 'PUT'
+            && ($body['nombre'] ?? null) === 'Cliente actualizado'
+            && ! array_key_exists('clave', $body)
+            && ! array_key_exists('invalido', $body))
+            ->andReturn([
+                'success' => true,
+                'status_code' => 200,
+                'retryable' => false,
+                'data' => ['success' => true, 'clave' => '58333'],
+            ]);
+
+        $response = $service->updateContact([
+            'clave' => '58333',
+            'nombre' => 'Cliente actualizado',
+            'invalido' => null,
+        ], $adapter);
+
+        $this->assertTrue($response['success']);
+    }
+
     public function test_it_requires_saldo_and_valid_status_only_when_creating_contact(): void
     {
         [$service] = $this->makeAspelOperationService('createContact', 'POST', '/api/contacts');

@@ -42,6 +42,11 @@ class AspelContactContractSeeder extends Seeder
                 ->update(['active' => false]);
             PropertyRelationship::query()
                 ->where('event_id', $event->id)
+                ->where('related_property_id', $aspelClassification->id)
+                ->where('property_id', '!=', $hubspotClassification->id)
+                ->update(['active' => false]);
+            PropertyRelationship::query()
+                ->where('event_id', $event->id)
                 ->where('related_property_id', $aspelFreeClassification->id)
                 ->where('property_id', '!=', $hubspotRating->id)
                 ->update(['active' => false]);

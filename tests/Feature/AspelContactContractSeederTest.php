@@ -79,6 +79,14 @@ class AspelContactContractSeederTest extends TestCase
             'event_id' => $event->id, 'property_id' => $legacyRating->id,
             'related_property_id' => $freeClassification->id, 'active' => true,
         ]);
+        $wrongClassification = PropertyRelationship::query()->create([
+            'event_id' => $event->id, 'property_id' => $legacyRating->id,
+            'related_property_id' => Property::query()->create([
+                'platform_id' => $aspel->id, 'name' => 'Clasificacion', 'key' => 'clasificacion',
+                'type' => 'string', 'required' => false, 'active' => true,
+            ])->id,
+            'active' => true,
+        ]);
 
         $this->seed(AspelContactContractSeeder::class);
         $this->seed(AspelContactContractSeeder::class);
@@ -110,6 +118,7 @@ class AspelContactContractSeederTest extends TestCase
             'related_property_id' => $aspelFreeClassification->id,
             'active' => true,
         ])->exists());
+        $this->assertFalse($wrongClassification->fresh()->active);
 
         $this->assertTrue(PropertyRelationship::query()->where([
             'event_id' => $polling->id,

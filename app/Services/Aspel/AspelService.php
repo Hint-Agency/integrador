@@ -1875,7 +1875,9 @@ class AspelService extends GenericPlatformService
         if (array_key_exists('invalido', $payload)) {
             $value = $payload['invalido'];
 
-            if (is_bool($value)) {
+            if ($value === null || (is_string($value) && trim($value) === '')) {
+                unset($payload['invalido']);
+            } elseif (is_bool($value)) {
                 $payload['invalido'] = $value ? '1' : '0';
             } elseif (is_scalar($value) && is_numeric(trim((string) $value))) {
                 $payload['invalido'] = trim((string) $value);

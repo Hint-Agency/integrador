@@ -32,7 +32,7 @@ Construir un sistema de integración multiplataforma que sincronice datos entre 
 10. Mantener y ejecutar seeder obligatorio de superadmin bootstrap.
 11. En errores de sincronización de contactos relacionados con HubSpot, intentar registrar una nota visible en el objeto HubSpot afectado y guardar el resultado en `Record.details.hubspot_note`.
 12. Modelar sincronizaciones manuales/controladas por plataforma usando propiedades técnicas `sync_to_{platform}` y write-back de estado técnico en HubSpot.
-13. Soportar polling programado de contactos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc` y matching por `clave`, `rfc`, `phone`, `email`.
+13. Soportar polling programado de contactos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc` y matching por `email`, `phone`, `clave`, `firstname`; no usar RFC para matching porque SAE puede compartir RFC genericos.
 14. Soportar polling programado de productos ASPEL -> HubSpot con cursor persistente, idempotencia por `clave + versionSinc`, detalle por `clave` y matching de producto por `clave`.
 15. Cotizaciones ASPEL: disparar por etapas configuradas de negocio, seleccionar una unica cotizacion publicada en las ultimas 24 horas sin exigir firma, validar sus propiedades tecnicas de sincronizacion, preparar su contacto principal y sus propias partidas, reconsultar precios/listas, bloquear diferencias sin corregirlas automaticamente, registrar notas en el negocio y write-back del documento en la cotizacion. Mantener IDs en fallos tecnicos y exigir nueva cotizacion tras errores de negocio.
 
@@ -364,7 +364,7 @@ Models
 - Write-back de respuesta: cuando un flujo genérico exitoso encadene de regreso a HubSpot, el siguiente evento debe tomar como base `destination_response.data` más contexto técnico mínimo (`hubspot_object_id`, `source_event_id`, etc.), evitando reutilizar el payload completo del evento anterior.
 - Propiedades técnicas por plataforma: para HubSpot -> plataforma externa, se debe favorecer el patrón `sync_to_{platform}`, `sync_status_{platform}`, `last_sync_{platform}`, `{platform}_id`, `last_error_{platform}`.
 - Triggers por plataforma: el disparo de sincronización controlada debe configurarse sobre `sync_to_{platform} = pending`, no sobre cada propiedad de negocio individual.
-- Polling ASPEL -> HubSpot: el flujo programado debe usar `sinceTs` y `sinceClave` persistidos en `configs`, idempotencia por `clave + versionSinc`, fetch de detalle por `GET /api/contacts/{clave}`, matching HubSpot en orden `clave -> rfc -> phone -> email`, y create cuando no exista coincidencia.
+- Polling ASPEL -> HubSpot: el flujo programado debe usar `sinceTs` y `sinceClave` persistidos en `configs`, idempotencia por `clave + versionSinc`, fetch de detalle por `GET /api/contacts/{clave}`, matching HubSpot en orden `email -> phone -> clave -> firstname` usando `nombre` de ASPEL, sin RFC, y create cuando no exista coincidencia.
 - Catalogos ASPEL de contactos: los selectores con codigos distintos entre plataformas deben configurarse mediante `platform.settings` y `property_relationships.meta.catalog`, con conversion bidireccional y omision segura de valores desconocidos.
 - Polling ASPEL productos -> HubSpot: el flujo programado debe usar `sinceTs` y `sinceClave` persistidos en `configs`, idempotencia por `clave + versionSinc`, fetch de detalle por `GET /api/products/{clave}`, matching HubSpot por `clave`, update si existe y create si no existe coincidencia.
 

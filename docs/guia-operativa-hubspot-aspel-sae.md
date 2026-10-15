@@ -101,7 +101,9 @@ Si encuentra una coincidencia única, actualiza el contacto existente. Si no enc
 
 La integración consulta periódicamente los contactos modificados en ASPEL SAE. Cuando detecta un cambio:
 
-- Actualiza el contacto de HubSpot si encuentra una coincidencia por clave, RFC, teléfono o correo.
+- Busca el contacto de HubSpot en orden por correo, teléfono, clave de ASPEL y nombre.
+- No utiliza RFC para identificarlo porque SAE puede compartir RFC genéricos entre varios clientes.
+- Actualiza el contacto cuando encuentra una coincidencia única.
 - Crea el contacto en HubSpot si no existe una coincidencia.
 - Evita procesar dos veces el mismo cambio.
 

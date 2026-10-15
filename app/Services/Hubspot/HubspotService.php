@@ -3900,24 +3900,25 @@ class HubspotService extends BaseService
     private function findHubspotContactForAspelPayload(array $payload, array $sourceData): array
     {
         $strategies = [
-            'clave' => $this->resolveScalarPayloadValue([
-                Arr::get($payload, 'clave'),
-                Arr::get($sourceData, 'clave'),
-                Arr::get($sourceData, 'CLAVE'),
-            ]),
-            'rfc' => $this->resolveScalarPayloadValue([
-                Arr::get($payload, 'rfc'),
-                Arr::get($sourceData, 'rfc'),
+            'email' => $this->resolveScalarPayloadValue([
+                Arr::get($payload, 'email'),
+                Arr::get($sourceData, 'email'),
+                Arr::get($sourceData, 'emailEnvio'),
             ]),
             'phone' => $this->resolveScalarPayloadValue([
                 Arr::get($payload, 'phone'),
                 Arr::get($sourceData, 'phone'),
                 Arr::get($sourceData, 'telefono'),
             ]),
-            'email' => $this->resolveScalarPayloadValue([
-                Arr::get($payload, 'email'),
-                Arr::get($sourceData, 'email'),
-                Arr::get($sourceData, 'emailEnvio'),
+            'clave' => $this->resolveScalarPayloadValue([
+                Arr::get($payload, 'clave'),
+                Arr::get($sourceData, 'clave'),
+                Arr::get($sourceData, 'CLAVE'),
+            ]),
+            'firstname' => $this->resolveScalarPayloadValue([
+                Arr::get($payload, 'nombre'),
+                Arr::get($sourceData, 'nombre'),
+                Arr::get($sourceData, 'NOMBRE'),
             ]),
         ];
 
@@ -3929,8 +3930,8 @@ class HubspotService extends BaseService
             $response = $this->hubspotApi->searchObjectByProperty('contacts', $propertyName, $value, [
                 'email',
                 'phone',
-                'rfc',
                 'clave',
+                'firstname',
             ]);
 
             if (! ($response['success'] ?? false)) {

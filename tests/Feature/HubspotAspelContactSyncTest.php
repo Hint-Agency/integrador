@@ -18,7 +18,7 @@ class HubspotAspelContactSyncTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_it_updates_hubspot_contact_matching_by_rfc_when_clave_is_missing_in_hubspot(): void
+    public function test_it_updates_hubspot_contact_matching_by_email_first(): void
     {
         config()->set('hubspot.access_token', 'token_123');
         config()->set('hubspot.base_url', 'https://api.hubapi.test');
@@ -29,16 +29,12 @@ class HubspotAspelContactSyncTest extends TestCase
                 $propertyName = $filter['propertyName'] ?? null;
                 $value = $filter['value'] ?? null;
 
-                if ($propertyName === 'clave' && $value === '50902') {
-                    return Http::response(['results' => []], 200);
-                }
-
-                if ($propertyName === 'rfc' && $value === 'LOMJ850214H12') {
+                if ($propertyName === 'email' && $value === 'juan.lopez@example.com') {
                     return Http::response([
                         'results' => [[
                             'id' => '401',
                             'properties' => [
-                                'rfc' => 'LOMJ850214H12',
+                                'email' => 'juan.lopez@example.com',
                             ],
                         ]],
                     ], 200);
@@ -68,7 +64,7 @@ class HubspotAspelContactSyncTest extends TestCase
         $this->assertTrue($result['success']);
         $this->assertSame('updated', $result['data']['operation']);
         $this->assertSame('401', $result['data']['contact_id']);
-        $this->assertSame('rfc', $result['data']['matched_by']);
+        $this->assertSame('email', $result['data']['matched_by']);
 
         Http::assertSent(function (Request $request): bool {
             if ($request->method() !== 'PATCH' || $request->url() !== 'https://api.hubapi.test/crm/v3/objects/contacts/401') {
@@ -89,6 +85,8 @@ class HubspotAspelContactSyncTest extends TestCase
                 && array_key_exists('last_sync_aspel', $properties)
                 && ($properties['version_sinc_aspel'] ?? null) === '2026-05-07 10:00:00';
         });
+        Http::assertNotSent(fn (Request $request): bool => $request->method() === 'POST'
+            && data_get($request->data(), 'filterGroups.0.filters.0.propertyName') === 'rfc');
     }
 
     public function test_it_prepares_create_fallback_when_no_hubspot_match_is_found(): void
@@ -118,9 +116,11 @@ class HubspotAspelContactSyncTest extends TestCase
         $this->assertSame('not_found', $result['data']['operation']);
         $this->assertSame(1, $result['data']['not_found_count']);
         $this->assertSame($this->buildAspelPayload(), $result['data']['output_payload']);
+        Http::assertNotSent(fn (Request $request): bool => $request->method() === 'POST'
+            && data_get($request->data(), 'filterGroups.0.filters.0.propertyName') === 'rfc');
     }
 
-    public function test_it_updates_hubspot_contact_matching_by_phone_when_clave_and_rfc_do_not_match(): void
+    public function test_it_updates_hubspot_contact_matching_by_phone_when_email_does_not_match(): void
     {
         config()->set('hubspot.access_token', 'token_123');
         config()->set('hubspot.base_url', 'https://api.hubapi.test');
@@ -131,11 +131,7 @@ class HubspotAspelContactSyncTest extends TestCase
                 $propertyName = $filter['propertyName'] ?? null;
                 $value = $filter['value'] ?? null;
 
-                if ($propertyName === 'clave' && $value === '50902') {
-                    return Http::response(['results' => []], 200);
-                }
-
-                if ($propertyName === 'rfc' && $value === 'LOMJ850214H12') {
+                if ($propertyName === 'email' && $value === 'juan.lopez@example.com') {
                     return Http::response(['results' => []], 200);
                 }
 
@@ -188,6 +184,10 @@ class HubspotAspelContactSyncTest extends TestCase
                 $propertyName = $filter['propertyName'] ?? null;
                 $value = $filter['value'] ?? null;
 
+                if (in_array($propertyName, ['email', 'phone'], true)) {
+                    return Http::response(['results' => []], 200);
+                }
+
                 if ($propertyName === 'clave' && $value === '50902') {
                     return Http::response([
                         'results' => [
@@ -216,6 +216,56 @@ class HubspotAspelContactSyncTest extends TestCase
         $this->assertSame('Multiple HubSpot contacts matched ASPEL change.', $result['message']);
         $this->assertSame('clave', data_get($result, 'data.match_property'));
         $this->assertCount(2, data_get($result, 'data.matches', []));
+    }
+
+    public function test_it_updates_hubspot_contact_matching_by_name_after_email_phone_and_clave(): void
+    {
+        config()->set('hubspot.access_token', 'token_123');
+        config()->set('hubspot.base_url', 'https://api.hubapi.test');
+
+        $attempted = [];
+        Http::fake(function (Request $request) use (&$attempted) {
+            if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
+                $filter = $request->data()['filterGroups'][0]['filters'][0] ?? [];
+                $propertyName = $filter['propertyName'] ?? null;
+                $attempted[] = $propertyName;
+
+                if ($propertyName === 'firstname' && ($filter['value'] ?? null) === 'JUAN CARLOS LOPEZ MARTINEZ') {
+                    return Http::response([
+                        'results' => [[
+                            'id' => '403',
+                            'properties' => ['firstname' => 'JUAN CARLOS LOPEZ MARTINEZ'],
+                        ]],
+                    ], 200);
+                }
+
+                return Http::response(['results' => []], 200);
+            }
+
+            if ($request->method() === 'PATCH' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/403') {
+                return Http::response([
+                    'id' => '403',
+                    'properties' => $request->data()['properties'] ?? [],
+                ], 200);
+            }
+
+            return Http::response(['error' => 'Unexpected request'], 500);
+        });
+
+        [$hubspotPlatform, $aspelPlatform, $mappingEvent, $syncEvent, $record] = $this->prepareAspelHubspotSyncContext();
+
+        $service = app()->make(HubspotService::class, [
+            'platform' => $hubspotPlatform,
+            'event' => $syncEvent,
+            'record' => $record,
+        ]);
+
+        $result = $service->updateAspelContactInHubspot($this->buildAspelPayload());
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('403', $result['data']['contact_id']);
+        $this->assertSame('firstname', $result['data']['matched_by']);
+        $this->assertSame(['email', 'phone', 'clave', 'firstname'], $attempted);
     }
 
     public function test_it_creates_hubspot_contact_from_explicit_create_fallback(): void

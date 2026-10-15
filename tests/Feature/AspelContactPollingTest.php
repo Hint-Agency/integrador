@@ -151,11 +151,11 @@ class AspelContactPollingTest extends TestCase
         Http::fake(function (Request $request) {
             if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
                 $filter = $request->data()['filterGroups'][0]['filters'][0] ?? [];
-                if (($filter['propertyName'] ?? null) === 'clave' && ($filter['value'] ?? null) === '50902') {
+                if (($filter['propertyName'] ?? null) === 'email' && ($filter['value'] ?? null) === 'juan.lopez@example.com') {
                     return Http::response([
                         'results' => [[
                             'id' => '401',
-                            'properties' => ['clave' => '50902'],
+                            'properties' => ['email' => 'juan.lopez@example.com'],
                         ]],
                     ], 200);
                 }
@@ -255,11 +255,11 @@ class AspelContactPollingTest extends TestCase
         Http::fake(function (Request $request) {
             if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
                 $filter = $request->data()['filterGroups'][0]['filters'][0] ?? [];
-                if (($filter['propertyName'] ?? null) === 'clave' && ($filter['value'] ?? null) === '50903') {
+                if (($filter['propertyName'] ?? null) === 'email' && ($filter['value'] ?? null) === 'maria.lopez@example.com') {
                     return Http::response([
                         'results' => [[
                             'id' => '402',
-                            'properties' => ['clave' => '50903'],
+                            'properties' => ['email' => 'maria.lopez@example.com'],
                         ]],
                     ], 200);
                 }
@@ -323,26 +323,6 @@ class AspelContactPollingTest extends TestCase
             'success' => true,
             'status_code' => 200,
             'retryable' => false,
-            'request_id' => 'req_detail_2',
-            'external_id' => '50903',
-            'latency_ms' => 8,
-            'attempt' => 1,
-            'endpoint' => 'https://api.example.com/api/contacts/50903',
-            'method' => 'GET',
-            'data' => [
-                'clave' => '50903',
-                'nombre' => 'MARIA LOPEZ MARTINEZ',
-                'rfc' => 'LOMM850214H12',
-                'telefono' => '5551234568',
-                'emailEnvio' => 'maria.lopez@example.com',
-                'status' => 'A',
-            ],
-            'error' => ['code' => null, 'message' => null, 'details' => null],
-        ])->ordered();
-        $adapter->shouldReceive('send')->once()->andReturn([
-            'success' => true,
-            'status_code' => 200,
-            'retryable' => false,
             'request_id' => 'req_detail_1',
             'external_id' => '50902',
             'latency_ms' => 8,
@@ -355,6 +335,26 @@ class AspelContactPollingTest extends TestCase
                 'rfc' => 'LOMJ850214H12',
                 'telefono' => '5551234567',
                 'emailEnvio' => 'juan.lopez@example.com',
+                'status' => 'A',
+            ],
+            'error' => ['code' => null, 'message' => null, 'details' => null],
+        ])->ordered();
+        $adapter->shouldReceive('send')->once()->andReturn([
+            'success' => true,
+            'status_code' => 200,
+            'retryable' => false,
+            'request_id' => 'req_detail_2',
+            'external_id' => '50903',
+            'latency_ms' => 8,
+            'attempt' => 1,
+            'endpoint' => 'https://api.example.com/api/contacts/50903',
+            'method' => 'GET',
+            'data' => [
+                'clave' => '50903',
+                'nombre' => 'MARIA LOPEZ MARTINEZ',
+                'rfc' => 'LOMM850214H12',
+                'telefono' => '5551234568',
+                'emailEnvio' => 'maria.lopez@example.com',
                 'status' => 'A',
             ],
             'error' => ['code' => null, 'message' => null, 'details' => null],
@@ -392,13 +392,14 @@ class AspelContactPollingTest extends TestCase
         Http::fake(function (Request $request) {
             if ($request->method() === 'POST' && $request->url() === 'https://api.hubapi.test/crm/v3/objects/contacts/search') {
                 $filter = $request->data()['filterGroups'][0]['filters'][0] ?? [];
+                $propertyName = $filter['propertyName'] ?? null;
                 $value = $filter['value'] ?? null;
 
-                if ($value === '50902') {
+                if ($propertyName === 'email' && $value === 'juan.lopez@example.com') {
                     return Http::response([
                         'results' => [[
                             'id' => '401',
-                            'properties' => ['clave' => '50902'],
+                            'properties' => ['email' => 'juan.lopez@example.com'],
                         ]],
                     ], 200);
                 }
